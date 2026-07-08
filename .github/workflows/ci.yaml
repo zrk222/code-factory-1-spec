@@ -1,0 +1,34 @@
+﻿name: ci
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -e ".[dev]"
+      - run: pytest -q
+      - name: end-to-end walkthrough (init -> gates -> loop -> handoff -> status)
+        run: |
+          mkdir wt && cd wt
+          specline init
+          specline new refunds
+          python -c "
+          import sys; sys.path.insert(0,'../tests')
+          from conftest import GOOD_SPEC, GOOD_PLAN
+          open('specs/refunds.md','w').write(GOOD_SPEC)
+          open('plans/refunds.md','w').write(GOOD_PLAN)"
+          specline validate refunds
+          specline gate spec refunds
+          specline tasks refunds
+          specline gate plan refunds
+          specline loop next refunds
+          specline loop done refunds T1
+          specline handoff refunds
+          specline agent claude
+          specline status
