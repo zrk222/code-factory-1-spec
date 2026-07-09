@@ -170,3 +170,17 @@ new → write spec → validate → strict → gate spec → write plan → task
 ```
 
 Deterministic by design: same spec text → same findings, every run. No LLM, no clock.
+## Failure attribution
+
+SpecLine 0.3 reports strict-lint results per requirement and drift-audit results
+per Python function. Failed units include a stable class such as
+`ambiguous_requirement`, `untyped_input`, `invented_param`, or `scope_escape`,
+plus the offending source phrase or code location. Existing pass/fail rules do
+not change.
+
+For machine-readable output:
+
+```bash
+specline strict my_feature --json
+specline audit my_feature --files slices/my_feature/logic.py --json
+```

@@ -156,8 +156,25 @@ def test_drift_attribution_classifies_invented_param(tmp_path):
     spec = _spec(tmp_path, GOOD)
     code = tmp_path / "refund" / "logic.py"
     code.parent.mkdir(parents=True, exist_ok=True)
-    code.write_text("MAX_RETRIES = 7\n")
+    code.write_text("def send():\n    retries = 7\n    return retries\n")
     rep = audit_code_against_spec(spec, [code], slice_prefix="refund")
     attr = rep.attribution([code])
     assert attr.n_checked == 1 and attr.n_passed == 0
+    assert attr.units[0].unit.endswith(":send")
     assert attr.units[0].failure_class.value == "invented_param"
+
+
+def test_drift_attribution_separates_functions(tmp_path):
+    spec = _spec(tmp_path, GOOD)
+    code = tmp_path / "refund" / "logic.py"
+    code.parent.mkdir(parents=True, exist_ok=True)
+    code.write_text(
+        "def clean():\n    return 500\n\n"
+        "def drifting():\n    retries = 7\n    return retries\n"
+    )
+    rep = audit_code_against_spec(spec, [code], slice_prefix="refund")
+    attr = rep.attribution([code])
+    assert attr.n_checked == 2 and attr.n_passed == 1
+    by_name = {unit.unit.rsplit(":", 1)[-1]: unit for unit in attr.units}
+    assert by_name["clean"].passed is True
+    assert by_name["drifting"].failure_class.value == "invented_param"

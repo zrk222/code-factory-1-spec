@@ -8,6 +8,7 @@ Deterministic: it parses, it does not judge intent.
 """
 from __future__ import annotations
 import re
+import ast
 from dataclasses import dataclass, field
 from pathlib import Path
 from .strict_lint import _declared_terms, _requirement_lines, Finding
@@ -35,23 +36,42 @@ class AuditReport:
         from .attribution import Attribution, FailureClass, UnitResult
         units = []
         for file_path in changed_files:
-            path_text = str(Path(file_path))
-            related = [f for f in self.blocks if path_text in f.message]
-            failure_class = None
-            if related:
-                code = related[0].code
-                failure_class = (
-                    FailureClass.INVENTED_PARAM if code == "A_INVENTED_PARAM"
-                    else FailureClass.STUB_UNFILLED if code == "A_STUB_LEFT"
-                    else FailureClass.SCOPE_ESCAPE
-                )
-            units.append(UnitResult(
-                unit=f"file:{path_text}",
-                stage="drift_audit",
-                passed=not related,
-                evidence="no drift found" if not related else related[0].message,
-                failure_class=failure_class,
-            ))
+            path = Path(file_path)
+            path_text = str(path)
+            file_findings = [f for f in self.blocks if path_text in f.message]
+            spans = []
+            if path.exists() and path.suffix == ".py":
+                try:
+                    tree = ast.parse(path.read_text())
+                    spans = [
+                        (node.name, node.lineno, getattr(node, "end_lineno", node.lineno))
+                        for node in ast.walk(tree)
+                        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    ]
+                except (SyntaxError, OSError, UnicodeDecodeError):
+                    spans = []
+            if not spans:
+                spans = [("<module>", 1, 10**9)]
+            for function_name, start, end in sorted(spans, key=lambda item: (item[1], item[0])):
+                related = [
+                    finding for finding in file_findings
+                    if finding.line == 0 or start <= finding.line <= end
+                ]
+                failure_class = None
+                if related:
+                    code = related[0].code
+                    failure_class = (
+                        FailureClass.INVENTED_PARAM if code == "A_INVENTED_PARAM"
+                        else FailureClass.STUB_UNFILLED if code == "A_STUB_LEFT"
+                        else FailureClass.SCOPE_ESCAPE
+                    )
+                units.append(UnitResult(
+                    unit=f"function:{path_text}:{function_name}",
+                    stage="drift_audit",
+                    passed=not related,
+                    evidence="no drift found" if not related else related[0].message,
+                    failure_class=failure_class,
+                ))
         return Attribution("drift_audit", len(units), sum(u.passed for u in units), units)
 
 

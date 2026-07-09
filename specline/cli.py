@@ -22,11 +22,13 @@ def main(argv=None):
     s = sub.add_parser("strict", help="STRICT semantic input contract — reject ambiguity before the coder")
     s.add_argument("feature"); s.add_argument("--root", default=".")
     s.add_argument("--warn", action="store_true", help="also show WARN-level smells")
+    s.add_argument("--json", action="store_true", help="emit machine-readable attribution")
 
     s = sub.add_parser("audit", help="post-code drift audit (invented params / scope escape / stubs)")
     s.add_argument("feature"); s.add_argument("--root", default=".")
     s.add_argument("--files", nargs="+", required=True, help="changed files to audit")
     s.add_argument("--slice", default=None, help="authorized slice prefix")
+    s.add_argument("--json", action="store_true", help="emit machine-readable attribution")
 
     s = sub.add_parser("tasks", help="lint plan task atomicity")
     s.add_argument("feature"); s.add_argument("--root", default=".")
@@ -71,7 +73,12 @@ def main(argv=None):
         print("spec OK — next: specline strict " + a.feature)
     elif a.cmd == "strict":
         from .strict_lint import strict_validate
-        rep = strict_validate(root/"specs"/f"{a.feature}.md")
+        spec_path = root/"specs"/f"{a.feature}.md"
+        rep = strict_validate(spec_path)
+        if a.json:
+            print(json.dumps({"passed": rep.ok,
+                              "attribution": rep.attribution(spec_path.read_text()).to_dict()},
+                             indent=2))
         for f in (rep.findings if a.warn else rep.blocks):
             print(str(f))
         if rep.blocks:
@@ -83,6 +90,10 @@ def main(argv=None):
         from .drift_audit import audit_code_against_spec, audit_report_lines
         rep = audit_code_against_spec(root/"specs"/f"{a.feature}.md",
                                       [Path(f) for f in a.files], slice_prefix=a.slice)
+        if a.json:
+            print(json.dumps({"passed": rep.ok,
+                              "attribution": rep.attribution([Path(f) for f in a.files]).to_dict()},
+                             indent=2))
         for line in audit_report_lines(rep):
             print(line)
         if rep.blocks:
