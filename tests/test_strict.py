@@ -137,3 +137,27 @@ def test_audit_flags_stub(tmp_path):
     code.write_text("def refund():\n    raise NotImplementedError\n")
     rep = audit_code_against_spec(spec, [code], slice_prefix="refund")
     assert any(b.code == "A_STUB_LEFT" for b in rep.blocks)
+
+
+def test_strict_attribution_localizes_requirement_verbatim(tmp_path):
+    phrase = "The system shall handle refunds appropriately."
+    spec = _spec(tmp_path, GOOD.replace(
+        "- The system shall store each approved refund in the `refunds` table.",
+        f"- {phrase}"))
+    rep = strict_validate(spec)
+    attr = rep.attribution(spec.read_text())
+    assert attr.n_checked == 3
+    assert attr.rate == 2 / 3
+    assert phrase in attr.units[2].evidence
+    assert attr.units[2].failure_class.value == "ambiguous_requirement"
+
+
+def test_drift_attribution_classifies_invented_param(tmp_path):
+    spec = _spec(tmp_path, GOOD)
+    code = tmp_path / "refund" / "logic.py"
+    code.parent.mkdir(parents=True, exist_ok=True)
+    code.write_text("MAX_RETRIES = 7\n")
+    rep = audit_code_against_spec(spec, [code], slice_prefix="refund")
+    attr = rep.attribution([code])
+    assert attr.n_checked == 1 and attr.n_passed == 0
+    assert attr.units[0].failure_class.value == "invented_param"

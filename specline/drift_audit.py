@@ -31,6 +31,29 @@ class AuditReport:
     def add(self, code, severity, message, line=0):
         self.findings.append(Finding(code, severity, message, line))
 
+    def attribution(self, changed_files):
+        from .attribution import Attribution, FailureClass, UnitResult
+        units = []
+        for file_path in changed_files:
+            path_text = str(Path(file_path))
+            related = [f for f in self.blocks if path_text in f.message]
+            failure_class = None
+            if related:
+                code = related[0].code
+                failure_class = (
+                    FailureClass.INVENTED_PARAM if code == "A_INVENTED_PARAM"
+                    else FailureClass.STUB_UNFILLED if code == "A_STUB_LEFT"
+                    else FailureClass.SCOPE_ESCAPE
+                )
+            units.append(UnitResult(
+                unit=f"file:{path_text}",
+                stage="drift_audit",
+                passed=not related,
+                evidence="no drift found" if not related else related[0].message,
+                failure_class=failure_class,
+            ))
+        return Attribution("drift_audit", len(units), sum(u.passed for u in units), units)
+
 
 def _spec_authorized_numbers(spec_text: str) -> set[str]:
     return {m.group(1) for m in re.finditer(r"\b(\d+(?:\.\d+)?)\b", spec_text)}

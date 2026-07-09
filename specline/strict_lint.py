@@ -45,6 +45,29 @@ class StrictReport:
     def add(self, code, severity, message, line=0):
         self.findings.append(Finding(code, severity, message, line))
 
+    def attribution(self, text: str):
+        from .attribution import Attribution, FailureClass, UnitResult
+        requirements = _requirement_lines(text)
+        units = []
+        for index, (line, phrase) in enumerate(requirements, 1):
+            related = [f for f in self.blocks if f.line == line]
+            failure_class = None
+            if related:
+                code = related[0].code
+                failure_class = (
+                    FailureClass.UNTYPED_INPUT if "TYPE" in code
+                    else FailureClass.AMBIGUOUS_REQUIREMENT
+                )
+            units.append(UnitResult(
+                unit=f"R{index}",
+                stage="strict_lint",
+                passed=not related,
+                evidence="requirement passed strict lint" if not related else
+                         f"{phrase.strip()} :: {related[0].message}",
+                failure_class=failure_class,
+            ))
+        return Attribution("strict_lint", len(units), sum(u.passed for u in units), units)
+
 
 _PLACEHOLDER = re.compile(
     r"<[^>]+>|\bTBD\b|\bTODO\b|\bFIXME\b|\bXXX\b|\b(?:foo|bar|baz|lorem|ipsum)\b", re.I)
