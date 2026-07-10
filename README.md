@@ -58,6 +58,7 @@ specline init                      # constitution + six-file context system
 specline new refunds               # spec + plan skeletons
 # ... you + your agent fill the spec ...
 specline validate refunds          # EARS/Gherkin/leak lint — ambiguity dies here
+specline verify-validators refunds # mutate requirements; catch hollow validators
 specline gate spec refunds        # hash-sealed human signoff
 specline tasks refunds             # atomicity lint: ≤4 files, one slice, verify cmd
 specline gate plan refunds        # locks the spec hash (drift guard arms)
@@ -67,7 +68,7 @@ specline loop done refunds T1      # runs verify command, seals receipt, advance
 specline handoff refunds           # decision table -> HSF workflow spec
 specline agent claude              # wires CLAUDE.md + /next-task command
 specline status                    # token-savings receipt
-pytest -q                          # 25 tests
+pytest -q                          # 30 tests
 ```
 
 ## The mechanisms (what's actually enforced)
@@ -146,6 +147,15 @@ is a lie until the blocks are resolved.
 Strict is **on by default** in `specline gate spec|plan`. Pass `strict=False` to the
 gate API only for legacy specs.
 
+### `specline verify-validators <feature>` - prove strict is not hollow
+
+Strict lint checks the original spec. Validator mutation checks the instrument:
+it deletes or inverts one requirement at a time and requires strict lint to
+notice. If a mutant still passes, that requirement reports `HOLLOW_VALIDATOR`.
+
+This is reverse-classical validation for specs. A hollow test passes against an
+empty implementation; a hollow validator passes against a mutilated spec.
+
 ### `specline audit <feature> --files … --slice …` — catch drift *after* the coder runs
 
 Compares what shipped against what the contract authorized:
@@ -170,9 +180,11 @@ new → write spec → validate → strict → gate spec → write plan → task
 ```
 
 Deterministic by design: same spec text → same findings, every run. No LLM, no clock.
+Validator mutation runs between `strict` and `gate spec` in the hardened flow.
+
 ## Failure attribution
 
-SpecLine 0.3 reports strict-lint results per requirement and drift-audit results
+SpecLine 0.3.1 reports strict-lint results per requirement and drift-audit results
 per Python function. Failed units include a stable class such as
 `ambiguous_requirement`, `untyped_input`, `invented_param`, or `scope_escape`,
 plus the offending source phrase or code location. Existing pass/fail rules do

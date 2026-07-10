@@ -24,6 +24,10 @@ def main(argv=None):
     s.add_argument("--warn", action="store_true", help="also show WARN-level smells")
     s.add_argument("--json", action="store_true", help="emit machine-readable attribution")
 
+    s = sub.add_parser("verify-validators", help="mutate requirements and prove strict validators catch drift")
+    s.add_argument("feature"); s.add_argument("--root", default=".")
+    s.add_argument("--json", action="store_true", help="emit machine-readable attribution")
+
     s = sub.add_parser("audit", help="post-code drift audit (invented params / scope escape / stubs)")
     s.add_argument("feature"); s.add_argument("--root", default=".")
     s.add_argument("--files", nargs="+", required=True, help="changed files to audit")
@@ -86,6 +90,20 @@ def main(argv=None):
                              f"the coder would guess these. Fix before gating.")
         print(f"STRICT OK — spec is unambiguous ({len(rep.warns)} warns). "
               f"next: specline gate spec {a.feature}")
+    elif a.cmd == "verify-validators":
+        from .validator_mutation import verify_validators
+        spec_path = root/"specs"/f"{a.feature}.md"
+        rep = verify_validators(spec_path)
+        if a.json:
+            print(json.dumps({"passed": rep.ok,
+                              "attribution": rep.attribution().to_dict(),
+                              "findings": [str(f) for f in rep.blocks]},
+                             indent=2))
+        for f in rep.blocks:
+            print(str(f))
+        if rep.blocks:
+            raise SystemExit(f"\nVALIDATOR MUTATION FAILED: {len(rep.blocks)} hollow validator(s) detected.")
+        print(f"VALIDATORS OK - all {len(rep.requirements)} requirement mutation(s) were killed.")
     elif a.cmd == "audit":
         from .drift_audit import audit_code_against_spec, audit_report_lines
         rep = audit_code_against_spec(root/"specs"/f"{a.feature}.md",

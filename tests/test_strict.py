@@ -94,6 +94,66 @@ def test_rule_undefined_fact_blocked(tmp_path):
     assert any(b.code == "S_RULE_UNDEFINED_FACT" for b in rep.blocks)
 
 
+VALIDATED = """\
+# Spec: validator coverage
+Status: approved
+
+## MUST — Functional core
+### Description
+Processes refund decisions for the `Customer` role.
+
+### User roles
+- Customer
+
+### Requirements (EARS)
+- When a `PAYMENT_CAPTURED` event arrives, the system shall store `PAYMENT_CAPTURED`.
+- When a refund request exceeds `500` dollars, the system shall return `403`.
+- The system shall store each approved refund in the `refunds` table.
+
+### Acceptance criteria (Gherkin)
+```gherkin
+Scenario: validator coverage
+  Given a `PAYMENT_CAPTURED` event
+  When a refund request exceeds 500 dollars
+  Then the system returns 403 and writes `refunds`
+```
+
+## Decision logic (factory candidates)
+| # | if | then |
+|---|----|------|
+| 1 | `PAYMENT_CAPTURED` | store `PAYMENT_CAPTURED` |
+| 2 | refund exceeds `500` | return `403` |
+| 3 | `refunds` | write `refunds` |
+"""
+
+
+def test_validator_mutation_passes_when_each_requirement_is_killed(tmp_path):
+    from specline.validator_mutation import verify_validators
+
+    rep = verify_validators(_spec(tmp_path, VALIDATED))
+    assert rep.ok, [str(block) for block in rep.blocks]
+    attr = rep.attribution()
+    assert attr.n_checked == 3
+    assert attr.n_passed == 3
+
+
+def test_validator_mutation_flags_hollow_requirement(tmp_path):
+    from specline.validator_mutation import verify_validators
+
+    hollow = VALIDATED.replace(
+        "### Acceptance criteria (Gherkin)",
+        "- The system shall emit `EMAIL_RECEIPT` for approved refunds.\n\n"
+        "### Acceptance criteria (Gherkin)",
+    )
+    rep = verify_validators(_spec(tmp_path, hollow))
+    assert not rep.ok
+    assert any(block.code == "S_HOLLOW_VALIDATOR" for block in rep.blocks)
+    attr = rep.attribution()
+    assert attr.n_checked == 4
+    assert attr.n_passed == 3
+    assert attr.units[3].failure_class.value == "hollow_validator"
+
+
 def test_approved_while_ambiguous_blocked(tmp_path):
     spec = GOOD.replace("Status: draft", "Status: approved").replace(
         "older than `90` days", "older than <N> days")

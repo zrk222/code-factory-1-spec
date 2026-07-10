@@ -30,7 +30,8 @@ Scenario: damaged item auto-approval
 ```
 
 ## SHOULD — Technical/structural
-- Data model: RefundRequest(order_id, reason, amount, has_receipt)
+- Data model: RefundRequest(order_id, reason, amount, has_receipt, item_damaged)
+- Decision outcomes: `APPROVED`, `HUMAN_REVIEW`
 
 ## SHOULD NOT — Implementation details
 

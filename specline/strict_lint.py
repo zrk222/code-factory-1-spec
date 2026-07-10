@@ -155,12 +155,23 @@ def _declared_terms(text: str) -> set[str]:
     for m in _LITERAL.finditer(text):
         val = next(g for g in m.groups() if g)
         terms.add(val.strip().lower())
+    for model in re.finditer(r"Data model:\s*[^\n(]*\(([^)]*)\)", text, flags=re.I):
+        for field in model.group(1).split(","):
+            name = field.strip().split(":", 1)[0].strip()
+            if name:
+                terms.add(name.lower())
     roles = _section(text, "### User roles", "###", "##")
     for ln in roles.splitlines():
         ln = ln.strip("- ").strip()
         if ln:
             terms.add(ln.lower())
     return terms
+
+
+def _declaration_text(text: str) -> str:
+    """Text that is allowed to declare facts for validators and rules."""
+    declarations = text.split("## Decision logic", 1)[0]
+    return re.sub(r"```gherkin.*?```", "", declarations, flags=re.S)
 
 
 def _check_placeholders(text, rep):
@@ -215,9 +226,8 @@ def _check_requirement_completeness(text, rep):
 def _check_gherkin_traceability(text, rep):
     # Declared terms must come from requirements/data-model/roles — NOT from the
     # acceptance block itself, or a value could self-declare by appearing only in
-    # Gherkin. Strip the gherkin fence before collecting declared terms.
-    without_gherkin = re.sub(r"```gherkin.*?```", "", text, flags=re.S)
-    declared = _declared_terms(without_gherkin)
+    # Gherkin. Decision rows are validators, not declarations, so strip them too.
+    declared = _declared_terms(_declaration_text(text))
     if "```gherkin" not in text:
         rep.add("S_NO_GHERKIN", "BLOCK", "no Gherkin acceptance scenario.")
         return
@@ -243,7 +253,7 @@ def _check_gherkin_traceability(text, rep):
 def _check_decision_determinism(text, rep):
     if "## Decision logic" not in text:
         return
-    declared = _declared_terms(text)
+    declared = _declared_terms(_declaration_text(text))
     section = text.split("## Decision logic", 1)[1]
     base_line = text[:text.find("## Decision logic")].count("\n") + 1
     seen = []
@@ -293,8 +303,7 @@ def _check_approved_consistency(text, rep):
                 "blocks above are resolved.")
 
 
-def strict_validate(path: Path) -> StrictReport:
-    text = Path(path).read_text()
+def strict_validate_text(text: str) -> StrictReport:
     rep = StrictReport()
     _check_placeholders(text, rep)
     _check_requirement_completeness(text, rep)
@@ -302,6 +311,10 @@ def strict_validate(path: Path) -> StrictReport:
     _check_decision_determinism(text, rep)
     _check_approved_consistency(text, rep)
     return rep
+
+
+def strict_validate(path: Path) -> StrictReport:
+    return strict_validate_text(Path(path).read_text())
 
 
 def strict_errors(path: Path) -> list[str]:
