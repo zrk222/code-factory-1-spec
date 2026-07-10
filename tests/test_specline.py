@@ -123,3 +123,49 @@ def test_ledger_summarizes_savings(project):
     next_task(project, "refunds")
     s = summarize(project)
     assert s["sessions"] == 1 and s["saved_pct"] > 50
+
+
+def test_optimize_prd_scores_ready_prd(tmp_path):
+    from specline.prd_optimizer import optimize_prd
+    prd = tmp_path / "prd.md"
+    prd.write_text(
+        "# PRD\n"
+        "User: engineer reviewing a pull request.\n"
+        "Non-goal: this will not auto-merge.\n"
+        "Risk: security changes require rollback and human approval.\n"
+        "- The system shall generate a reviewer evidence packet.\n"
+        "- The system must record validator and test receipt paths.\n"
+        "Acceptance: Given a feature trace, when optimize runs, then PR_EVIDENCE.md exists.\n"
+        "Proof: pytest asserts the packet and receipt fields.\n",
+        encoding="utf-8",
+    )
+    report = optimize_prd(prd)
+    assert report.passed
+    assert report.grade in {"A", "B"}
+
+
+def test_optimize_prd_blocks_vague_prd(tmp_path):
+    from specline.prd_optimizer import optimize_prd
+    prd = tmp_path / "bad.md"
+    prd.write_text("Make it simple and nice soon.", encoding="utf-8")
+    report = optimize_prd(prd)
+    assert not report.passed
+    assert report.ambiguity_count >= 2
+
+
+def test_cli_optimize_prd_json(tmp_path, capsys):
+    from specline.cli import main
+    prd = tmp_path / "prd.md"
+    prd.write_text(
+        "User: reviewer.\n"
+        "Non-goal: no auto-merge.\n"
+        "Risk: rollback on failure.\n"
+        "- The system shall write evidence.\n"
+        "- The system must record receipts.\n"
+        "Acceptance: Given a trace, when run, then output exists.\n"
+        "Proof: pytest validates output.\n",
+        encoding="utf-8",
+    )
+    main(["optimize-prd", str(prd), "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["passed"] is True

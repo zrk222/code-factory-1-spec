@@ -58,8 +58,12 @@ def main(argv=None):
     s = sub.add_parser("status", help="progress + token-savings receipt")
     s.add_argument("--root", default=".")
 
+    s = sub.add_parser("optimize-prd", help="score a PRD before implementation")
+    s.add_argument("path", help="PRD/spec markdown path")
+    s.add_argument("--json", action="store_true")
+
     a = p.parse_args(argv)
-    root = Path(a.root)
+    root = Path(getattr(a, "root", "."))
 
     if a.cmd == "init":
         from .scaffold import init_project
@@ -149,6 +153,12 @@ def main(argv=None):
         print(json.dumps(s, indent=2))
         if s["sessions"]:
             print(f"→ packets used {s['packet_tokens']:,} est. tokens vs {s['naive_tokens']:,} naive: {s['saved_pct']}% saved")
+    elif a.cmd == "optimize-prd":
+        from .prd_optimizer import optimize_prd, render_prd_score
+        rep = optimize_prd(Path(a.path))
+        print(json.dumps(rep.to_dict(), indent=2) if a.json else render_prd_score(rep))
+        if not rep.passed:
+            raise SystemExit(1)
 
 if __name__ == "__main__":
     main()

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "code-factory-1-spec"
-version = "0.3.1"
-description = "SpecLine — a spec-driven production line for AI-assisted engineering: PRD -> spec -> plan -> atomic task packets -> gated code, with token-lean context hygiene and a compiled-decision handoff to Harness Software Factory (HSF)."
+version = "0.4.0"
+description = "SpecLine â€” a spec-driven production line for AI-assisted engineering: PRD -> spec -> plan -> atomic task packets -> gated code, with token-lean context hygiene and a compiled-decision handoff to Harness Software Factory (HSF)."
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
@@ -25,3 +25,4 @@ specline = ["../templates/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
