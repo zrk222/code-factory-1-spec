@@ -22,7 +22,10 @@ def log_packet(root: Path, feature: str, task_id: str, tokens_est: int, sha: str
     root = Path(root)
     entry = {"ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
              "feature": feature, "task": task_id, "packet_tokens": tokens_est,
-             "naive_baseline_tokens": _naive_baseline_tokens(root, feature), "sha": sha}
+             "packet_tokens_method": "caller_estimate",
+             "naive_baseline_tokens": _naive_baseline_tokens(root, feature),
+             "baseline_method": "utf8_character_count_divided_by_4",
+             "sha": sha}
     lp = root/LEDGER
     lp.parent.mkdir(exist_ok=True)
     with lp.open("a") as f:
@@ -32,9 +35,13 @@ def log_packet(root: Path, feature: str, task_id: str, tokens_est: int, sha: str
 def summarize(root: Path) -> dict:
     lp = Path(root)/LEDGER
     if not lp.exists():
-        return {"sessions": 0, "packet_tokens": 0, "naive_tokens": 0, "saved_pct": 0.0}
+        return {"sessions": 0, "packet_tokens": 0, "naive_tokens": 0,
+                "saved_pct": None, "measurement": "no data"}
     rows = [json.loads(l) for l in lp.read_text().splitlines() if l.strip()]
     pt = sum(r["packet_tokens"] for r in rows)
     nt = sum(r["naive_baseline_tokens"] for r in rows)
     return {"sessions": len(rows), "packet_tokens": pt, "naive_tokens": nt,
-            "saved_pct": round(100 * (1 - pt / nt), 1) if nt else 0.0}
+            "saved_pct": round(100 * (1 - pt / nt), 1) if nt else None,
+            "measurement": "modeled from character-count estimates",
+            "packet_tokens_method": "caller_estimate",
+            "baseline_method": "utf8_character_count_divided_by_4"}

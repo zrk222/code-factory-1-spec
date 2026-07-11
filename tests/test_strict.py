@@ -137,6 +137,20 @@ def test_validator_mutation_passes_when_each_requirement_is_killed(tmp_path):
     assert attr.n_passed == 3
 
 
+def test_challenge_writes_standard_receipt(tmp_path, capsys):
+    from specline.cli import main
+    spec_dir = tmp_path / "specs"
+    spec_dir.mkdir()
+    (spec_dir / "validator.md").write_text(VALIDATED)
+    out = tmp_path / "challenge.json"
+    main(["challenge", "validator", "--root", str(tmp_path), "--out", str(out)])
+    import json
+    payload = json.loads(out.read_text())
+    assert payload["schema"] == "factory.challenge.v1"
+    assert payload["passed"] is True
+    assert payload["mutants_killed"] == payload["mutants_total"] == 3
+
+
 def test_validator_mutation_flags_hollow_requirement(tmp_path):
     from specline.validator_mutation import verify_validators
 

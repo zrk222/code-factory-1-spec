@@ -101,11 +101,12 @@ factory; nothing is improvised twice.
 
 Every gate signoff, packet emission, and task completion writes a hash-sealed
 line to `context/PROGRESS.md`, and the context ledger accumulates the token
-economics (`specline status` â€” the walkthrough example shows ~75% saved vs
-naive full-context sessions, and the gap widens as the repo grows). Claims
+economics (`specline status`). Provider-reported usage is measured when supplied;
+the UTF-8 character-count comparison baseline is explicitly modeled, and
+tokenization is labeled estimated when the optional tokenizer is absent. Claims
 trace to receipts, never to vibes. That's the whole point.
 
-MIT licensed.
+MIT OR Apache-2.0 licensed.
 
 ---
 
@@ -149,6 +150,9 @@ notice. If a mutant still passes, that requirement reports `HOLLOW_VALIDATOR`.
 This is reverse-classical validation for specs. A hollow test passes against an
 empty implementation; a hollow validator passes against a mutilated spec.
 
+`specline challenge <feature>` writes this evidence as a standard
+`factory.challenge.v1` receipt for inclusion in a Factory Passport.
+
 ### `specline audit <feature> --files â€¦ --slice â€¦` â€” catch drift *after* the coder runs
 
 Compares what shipped against what the contract authorized:
@@ -190,3 +194,5 @@ specline strict my_feature --json
 specline audit my_feature --files slices/my_feature/logic.py --json
 ```
 
+[![CI](https://github.com/zrk222/code-factory-1-spec/actions/workflows/ci.yaml/badge.svg)](https://github.com/zrk222/code-factory-1-spec/actions/workflows/ci.yaml)
+[![PyPI](https://img.shields.io/pypi/v/code-factory-1-spec.svg)](https://pypi.org/project/code-factory-1-spec/)

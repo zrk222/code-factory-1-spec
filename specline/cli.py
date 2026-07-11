@@ -28,6 +28,10 @@ def main(argv=None):
     s.add_argument("feature"); s.add_argument("--root", default=".")
     s.add_argument("--json", action="store_true", help="emit machine-readable attribution")
 
+    s = sub.add_parser("challenge", help="write a standard proof-by-sabotage validator receipt")
+    s.add_argument("feature"); s.add_argument("--root", default=".")
+    s.add_argument("--out", default=None)
+
     s = sub.add_parser("audit", help="post-code drift audit (invented params / scope escape / stubs)")
     s.add_argument("feature"); s.add_argument("--root", default=".")
     s.add_argument("--files", nargs="+", required=True, help="changed files to audit")
@@ -108,6 +112,26 @@ def main(argv=None):
         if rep.blocks:
             raise SystemExit(f"\nVALIDATOR MUTATION FAILED: {len(rep.blocks)} hollow validator(s) detected.")
         print(f"VALIDATORS OK - all {len(rep.requirements)} requirement mutation(s) were killed.")
+    elif a.cmd == "challenge":
+        from .validator_mutation import verify_validators
+        rep = verify_validators(root / "specs" / f"{a.feature}.md")
+        attr = rep.attribution().to_dict()
+        payload = {
+            "schema": "factory.challenge.v1",
+            "brick": "specline",
+            "feature": a.feature,
+            "stage": "validator_mutation",
+            "passed": rep.ok and attr["n_checked"] > 0,
+            "mutants_total": attr["n_checked"],
+            "mutants_killed": attr["n_passed"],
+            "attribution": attr,
+        }
+        out = Path(a.out) if a.out else root / ".specline" / a.feature / "challenge.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        print(json.dumps(payload | {"receipt_path": str(out)}, indent=2))
+        if not payload["passed"]:
+            raise SystemExit(1)
     elif a.cmd == "audit":
         from .drift_audit import audit_code_against_spec, audit_report_lines
         rep = audit_code_against_spec(root/"specs"/f"{a.feature}.md",
@@ -152,7 +176,8 @@ def main(argv=None):
         s = summarize(root)
         print(json.dumps(s, indent=2))
         if s["sessions"]:
-            print(f"→ packets used {s['packet_tokens']:,} est. tokens vs {s['naive_tokens']:,} naive: {s['saved_pct']}% saved")
+            print(f"packet estimate: {s['packet_tokens']:,} tokens; modeled baseline: "
+                  f"{s['naive_tokens']:,}; modeled difference: {s['saved_pct']}%")
     elif a.cmd == "optimize-prd":
         from .prd_optimizer import optimize_prd, render_prd_score
         rep = optimize_prd(Path(a.path))
