@@ -3,7 +3,7 @@
 **A spec-driven production line for AI coding agents.** PRD â†’ spec â†’ plan â†’
 atomic task packets â†’ gated code â†’ production, with token-lean context
 hygiene enforced by tooling instead of discipline, and a compiled-decision
-handoff to [Harness Software Factory](../harness-factory) for the logic that
+handoff to [Harness Software Factory](https://github.com/zrk222/code-factory-3-compile) for the logic that
 should never be improvised twice.
 
 Works with **Claude Code, Codex, and any agent harness** â€” one command wires it in.
