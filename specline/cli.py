@@ -3,10 +3,20 @@ init -> new -> (write spec) -> validate -> gate spec -> (write plan) ->
 tasks -> gate plan -> loop next/done ... -> gate code -> handoff -> status
 """
 from __future__ import annotations
-import argparse, json
+import argparse, json, sys
 from pathlib import Path
 
+
+def _emit_version(as_json: bool) -> None:
+    from .provenance import provenance
+    payload = provenance()
+    print(json.dumps(payload, indent=2, sort_keys=True) if as_json else f"specline {payload['version']}")
+
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "--version":
+        _emit_version("--json" in argv)
+        return
     p = argparse.ArgumentParser(prog="specline", description="Spec-driven production line for AI coding agents")
     sub = p.add_subparsers(required=True, dest="cmd")
 
@@ -66,10 +76,15 @@ def main(argv=None):
     s.add_argument("path", help="PRD/spec markdown path")
     s.add_argument("--json", action="store_true")
 
+    s = sub.add_parser("version", help="show package provenance")
+    s.add_argument("--json", action="store_true")
+
     a = p.parse_args(argv)
     root = Path(getattr(a, "root", "."))
 
-    if a.cmd == "init":
+    if a.cmd == "version":
+        _emit_version(a.json)
+    elif a.cmd == "init":
         from .scaffold import init_project
         created = init_project(root)
         print("created:\n  " + "\n  ".join(str(c) for c in created))
