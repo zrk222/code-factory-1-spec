@@ -13,4 +13,4 @@ Factory workflow spec so it can be compiled ONCE into gated,
 deterministic code. Agents write tissue; humans own the skeleton;
 the factory owns the decisions.
 """
-__version__ = "0.5.3"
+__version__ = "0.5.4"
