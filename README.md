@@ -8,6 +8,28 @@ should never be improvised twice.
 
 Works with **Claude Code, Codex, and any agent harness** â€” one command wires it in.
 
+## Code Factory target handoff
+
+SpecLine is the intent gate for Code Factory's four target compiler. Run
+`specline optimize-prd`, strict validation, and validator mutation before
+generation; then pass the reviewed PRD to:
+
+```bash
+factory create --prd PRD.md --target worker|web|mobile|agent-ui --out <directory>
+```
+
+The generated target begins blocked and carries an SSAT, smoke hook, governance
+manifest, Mermaid map, and source-bound receipt. SpecLine proves the input
+contract is enforceable; it does not certify the generated product or grant
+deploy, publish, connector, credential, signing, or external-message authority.
+
+```mermaid
+flowchart LR
+    A["Intent"] --> B["Build and gate"]
+    B --> C["Compile and verify"]
+    C --> D["Signed receipts and human-owned ship"]
+```
+
 ```
 PRD â”€â”€> Spec (EARS+Gherkin) â”€â”€> Gate â”€â”€> Plan (atomic tasks) â”€â”€> Gate
                                                         â”‚
