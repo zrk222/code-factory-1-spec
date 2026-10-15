@@ -107,8 +107,8 @@ agents, and validator mutation proves the checks are not hollow.
 |---|---|
 | "Write clear specs" | EARS keyword lint, Gherkin required, implementation-leak detection (`E_IMPL_LEAK`) |
 | "Keep tasks small" | Atomicity linter: â‰¤4 files, one vertical slice, explicit verify command, no skeleton edits |
-| "Reset agent context" | The loop emits self-contained **task packets** under a hard ~2.2k-token budget; one packet = one session |
-| "Minimize context (C_t=Î³Â·R_fÂ·T_d)" | Packets list the exact R_f file set; excerpt only spec lines relevant to the task; deterministic prune over budget |
+| "Reset agent context" | One self-contained task packet per session, capped at a 2,200-token character-based estimate |
+| "Minimize context" | Exact file scope and complete governing spec; oversized packets stop with split guidance |
 | "Prevent intent drift" | Plan gate seals the spec hash; if the spec changes, the loop **refuses** (`E_INTENT_DRIFT`) until re-gated |
 | "Human review gates" | `specline gate spec|plan|code` writes hash-sealed signoff receipts to the progress tracker |
 | "Don't let agents improvise business rules" | Decision tables compile through HSF: one-time generation, four gates, zero tokens per decision |
@@ -200,11 +200,18 @@ Compares what shipped against what the contract authorized:
 - **`A_UNAUTHORIZED_FILE`** â€” a file not in the packet's list.
 - **`A_STUB_LEFT`** â€” a `TODO`/`NotImplementedError` left behind.
 
-### Requirement-scoped packets
+### Complete task packets
 
-The packet excerpt no longer bag-of-words-matches individual lines (which could hand the
-agent half a requirement). It now ships **whole requirement blocks** and the **complete
-acceptance scenario intact** â€” the agent never receives a partial rule to improvise around.
+Each packet includes the complete governing specification, including nested
+requirements and acceptance scenarios. Requirements are never shortened to fit.
+If the packet exceeds the 2,200-token estimate (characters divided by four,
+rounded up), `E_PACKET_BUDGET` asks you to split the feature/spec and re-approve
+its plan. This is a size estimate, not a model tokenizer count.
+
+Task files must resolve inside the declared repository slice or `tests/`.
+Repository-wide slices, traversal, prefix lookalikes and escaping symbolic links
+are rejected. Packet outputs cannot redirect through symbolic links. Rejected
+inputs leave the previous packet unchanged.
 
 ### Flow
 
