@@ -87,6 +87,232 @@ def test_verify_failure_blocks_done(project):
     with pytest.raises(SystemExit, match="VERIFY FAILED"):
         mark_done(project, "refunds", "T1")
 
+
+def test_skip_verify_does_not_complete_task(project):
+    from specline.gates import gate, receipt_path
+    from specline.loop import mark_done
+    gate(project, "plan", "refunds")
+    result = mark_done(project, "refunds", "T1", run_verify=False)
+    assert result == {"task": "T1", "verified": False, "status": "NOT_RUN"}
+    assert "- [ ] T1 |" in (project / "plans/refunds.md").read_text()
+    assert not receipt_path(project, "refunds", "T1").exists()
+    assert "DONE refunds T1" not in (project / "context/PROGRESS.md").read_text()
+
+
+@pytest.mark.parametrize("change", ["command", "description", "spec"])
+def test_done_rejects_drift_before_execution(project, monkeypatch, change):
+    from specline.gates import gate
+    from specline.loop import mark_done
+    gate(project, "plan", "refunds")
+    path = project / ("specs/refunds.md" if change == "spec" else "plans/refunds.md")
+    original = path.read_text()
+    replacement = {"command": ("print('ok')", "print('changed')"),
+                   "description": ("Build the intake", "Build the revised intake"),
+                   "spec": ("Customers request refunds", "Customers track refunds")}[change]
+    path.write_text(original.replace(*replacement))
+    def forbidden(*args, **kwargs):
+        pytest.fail("stale verification command executed")
+    monkeypatch.setattr("specline.loop.subprocess.run", forbidden)
+    with pytest.raises(SystemExit, match="E_INTENT_DRIFT"):
+        mark_done(project, "refunds", "T1")
+
+
+def test_latest_exact_feature_approval_is_used(project):
+    from specline.gates import gate
+    from specline.loop import next_task
+    gate(project, "plan", "refunds")
+    spec = project / "specs/refunds.md"
+    spec.write_text(spec.read_text().replace("Customers request refunds", "Customers track refunds"))
+    gate(project, "plan", "refunds")
+    assert next_task(project, "refunds")["status"] == "ready"
+    (project / "specs/refund.md").write_text(spec.read_text())
+    (project / "plans/refund.md").write_text((project / "plans/refunds.md").read_text())
+    with pytest.raises(SystemExit, match="plan gate missing"):
+        next_task(project, "refund")
+
+
+def test_manual_checkbox_is_not_verification(project):
+    from specline.gates import gate
+    from specline.loop import next_task
+    gate(project, "plan", "refunds")
+    plan = project / "plans/refunds.md"
+    plan.write_text(plan.read_text().replace("- [ ] T1 |", "- [x] T1 |"))
+    with pytest.raises(SystemExit, match="E_COMPLETION_MISSING"):
+        next_task(project, "refunds")
+
+
+def test_completion_reuses_receipt_and_recovers_projection(project, monkeypatch):
+    import subprocess
+    import specline.loop as loop
+    from specline.gates import gate
+    gate(project, "plan", "refunds")
+    calls = []
+    def verify(*args, **kwargs):
+        calls.append(args[0])
+        return subprocess.CompletedProcess(args[0], 0, "ok", "")
+    monkeypatch.setattr(loop.subprocess, "run", verify)
+    project_done = loop._project_done
+    def interrupted(*args):
+        raise OSError("interrupted projection")
+    monkeypatch.setattr(loop, "_project_done", interrupted)
+    with pytest.raises(OSError, match="interrupted projection"):
+        loop.mark_done(project, "refunds", "T1")
+    monkeypatch.setattr(loop, "_project_done", project_done)
+    assert loop.next_task(project, "refunds")["task"] == "T2"
+    assert loop.mark_done(project, "refunds", "T1")["reused"] is True
+    assert len(calls) == 1
+    assert "- [x] T1 |" in (project / "plans/refunds.md").read_text()
+
+
+def test_completion_rejects_changed_task_source(project):
+    from specline.gates import gate
+    from specline.loop import mark_done, next_task
+    gate(project, "plan", "refunds")
+    mark_done(project, "refunds", "T1")
+    path = project / "slices/refunds/intake.py"
+    path.parent.mkdir(parents=True)
+    path.write_text("changed = True\n")
+    with pytest.raises(SystemExit, match="E_COMPLETION_STALE"):
+        next_task(project, "refunds")
+
+
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_explicit_completion_reverifies_changed_source(project, monkeypatch, returncode):
+    import subprocess
+    from specline.gates import gate, receipt_path
+    from specline.loop import mark_done, next_task
+
+    gate(project, "plan", "refunds")
+    mark_done(project, "refunds", "T1")
+    receipt = receipt_path(project, "refunds", "T1")
+    original = receipt.read_bytes()
+    path = project / "slices/refunds/intake.py"
+    path.parent.mkdir(parents=True)
+    path.write_text("changed = True\n")
+    calls = []
+
+    def verify(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, returncode, "verified", "")
+
+    monkeypatch.setattr("specline.loop.subprocess.run", verify)
+    if returncode:
+        with pytest.raises(SystemExit, match="VERIFY FAILED"):
+            mark_done(project, "refunds", "T1")
+        assert receipt.read_bytes() == original
+        with pytest.raises(SystemExit, match="E_COMPLETION_STALE"):
+            next_task(project, "refunds")
+    else:
+        assert mark_done(project, "refunds", "T1")["reused"] is False
+        assert receipt.read_bytes() != original
+        assert next_task(project, "refunds")["task"] == "T2"
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("skip", [False, True])
+def test_cli_completion_reports_actual_verification_state(project, capsys, skip):
+    from specline.cli import main
+    from specline.gates import gate, receipt_path
+
+    gate(project, "plan", "refunds")
+    args = ["loop", "done", "refunds", "T1", "--root", str(project)]
+    if skip:
+        args.append("--no-verify")
+    main(args)
+    result = json.loads(capsys.readouterr().out)
+    assert result["verified"] is not skip
+    assert result["status"] == ("NOT_RUN" if skip else "PASS")
+    assert receipt_path(project, "refunds", "T1").exists() is not skip
+
+
+def test_candidate_hashing_streams_source_without_read_bytes(tmp_path, monkeypatch):
+    import hashlib
+    from pathlib import Path
+    from specline.loop import _candidate
+
+    data = b"source-data" * 100_000
+    (tmp_path / "source.py").write_bytes(data)
+    def forbidden(*args, **kwargs):
+        pytest.fail("source hashing must not allocate the whole file")
+    monkeypatch.setattr(Path, "read_bytes", forbidden)
+    assert _candidate(tmp_path, {"files": ["source.py", "missing.py"]}) == {
+        "source.py": hashlib.sha256(data).hexdigest(), "missing.py": None
+    }
+
+
+def test_verification_timeout_never_completes_task(project, monkeypatch):
+    import subprocess
+    from specline.gates import gate, receipt_path
+    from specline.loop import mark_done
+
+    gate(project, "plan", "refunds")
+    def timeout(command, **kwargs):
+        assert kwargs["timeout"] == 300
+        raise subprocess.TimeoutExpired(command, 300)
+    monkeypatch.setattr("specline.loop.subprocess.run", timeout)
+    with pytest.raises(SystemExit, match="timed out"):
+        mark_done(project, "refunds", "T1")
+    assert not receipt_path(project, "refunds", "T1").exists()
+    assert "- [ ] T1 |" in (project / "plans/refunds.md").read_text()
+
+
+def test_completion_refresh_rejects_corrupt_receipt_before_execution(project, monkeypatch):
+    from specline.gates import gate, receipt_path
+    from specline.loop import mark_done
+
+    gate(project, "plan", "refunds")
+    mark_done(project, "refunds", "T1")
+    path = receipt_path(project, "refunds", "T1")
+    value = json.loads(path.read_text())
+    value["candidate"] = {}
+    path.write_text(json.dumps(value))
+    def unexpected(*args, **kwargs):
+        pytest.fail("corrupt receipt must block before verification")
+    monkeypatch.setattr("specline.loop.subprocess.run", unexpected)
+    with pytest.raises(SystemExit, match="E_RECEIPT_INVALID"):
+        mark_done(project, "refunds", "T1")
+
+
+def test_verification_rejects_source_change_during_run(project, monkeypatch):
+    import subprocess
+    from specline.gates import gate, receipt_path
+    from specline.loop import mark_done
+    gate(project, "plan", "refunds")
+    def verify(*args, **kwargs):
+        path = project / "slices/refunds/intake.py"
+        path.parent.mkdir(parents=True)
+        path.write_text("changed = True\n")
+        return subprocess.CompletedProcess(args[0], 0, "", "")
+    monkeypatch.setattr("specline.loop.subprocess.run", verify)
+    with pytest.raises(SystemExit, match="E_VERIFY_DRIFT"):
+        mark_done(project, "refunds", "T1")
+    assert not receipt_path(project, "refunds", "T1").exists()
+
+
+def test_corrupt_approval_is_rejected(project):
+    from specline.gates import gate, receipt_path
+    from specline.loop import next_task
+    gate(project, "plan", "refunds")
+    path = receipt_path(project, "refunds")
+    value = json.loads(path.read_text())
+    value["feature"] = "other"
+    path.write_text(json.dumps(value))
+    with pytest.raises(SystemExit, match="E_RECEIPT_INVALID"):
+        next_task(project, "refunds")
+
+
+def test_atomic_receipt_failure_keeps_previous_file(tmp_path, monkeypatch):
+    from specline.gates import atomic_text
+    path = tmp_path / "receipt.json"
+    path.write_text("previous")
+    def interrupted(*args):
+        raise OSError("replace failed")
+    monkeypatch.setattr("specline.gates.os.replace", interrupted)
+    with pytest.raises(OSError, match="replace failed"):
+        atomic_text(path, "new")
+    assert path.read_text() == "previous"
+    assert list(tmp_path.iterdir()) == [path]
+
 def test_handoff_emits_valid_hsf_spec(project):
     from specline.handoff import handoff_to_hsf
     import yaml

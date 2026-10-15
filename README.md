@@ -65,15 +65,30 @@ specline verify-validators refunds # mutate requirements; catch hollow validator
 specline optimize-prd specs/refunds.md # score PRD clarity before implementation
 specline gate spec refunds        # hash-sealed human signoff
 specline tasks refunds             # atomicity lint: â‰¤4 files, one slice, verify cmd
-specline gate plan refunds        # locks the spec hash (drift guard arms)
+specline gate plan refunds        # binds approval to this repository, spec and plan
 specline loop next refunds         # emits a token-budgeted TASK PACKET
 # ... agent session does exactly one packet ...
 specline loop done refunds T1      # runs verify command, seals receipt, advances
 specline handoff refunds           # decision table -> HSF workflow spec
 specline agent claude              # wires CLAUDE.md + /next-task command
 specline status                    # token-savings receipt
-pytest -q                          # 30 tests
+pytest -q                          # local tests
 ```
+
+## Approval and completion receipts
+
+Plan approval binds the exact repository, feature, specification and task definitions.
+Re-run `specline gate plan <feature>` after editing governing text or verification
+commands, including when upgrading a project with legacy progress-only approvals.
+
+`specline loop done <feature> <task>` runs verification before recording completion.
+`--no-verify` returns `NOT_RUN` and leaves the task unfinished. A valid completion
+receipt can recover an interrupted checkbox update without repeating verification.
+Changed task files require explicit verification again; corrupt receipts block.
+
+Receipts provide local integrity, not authenticated approval or release authority.
+Their source binding covers declared task files; it does not establish unchanged
+external services, dependencies or toolchains. Verification has a 300-second timeout.
 
 ## PRD optimizer
 
