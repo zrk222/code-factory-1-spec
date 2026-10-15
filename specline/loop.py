@@ -52,8 +52,17 @@ def _completion(root: Path, feature: str, task: dict, *, refresh: bool = False) 
 
 
 def _project_done(plan: Path, task_id: str):
-    text = plan.read_text().replace(f"- [ ] {task_id} |", f"- [x] {task_id} |", 1)
-    atomic_text(plan, text)
+    original = plan.read_text()
+    text = original.replace(f"- [ ] {task_id} |", f"- [x] {task_id} |", 1)
+    if text != original:
+        atomic_text(plan, text)
+
+
+def _project_completion(root: Path, feature: str, task_id: str, record: dict):
+    _project_done(root / "plans" / f"{feature}.md", task_id)
+    event = f"DONE {feature} {task_id} verify_pass=true receipt_seal={record['seal']}"
+    if not any(line.partition("] ")[2] == event for line in _progress(root).read_text().splitlines()):
+        _append_progress(root, event)
 
 def next_task(root: Path, feature: str) -> dict:
     root = Path(root)
@@ -64,8 +73,8 @@ def next_task(root: Path, feature: str) -> dict:
         raise SystemExit("plan not clean:\n" + "\n".join(errors))
     todo = []
     for task in tasks:
-        if _completion(root, feature, task):
-            _project_done(plan, task["id"])
+        if record := _completion(root, feature, task):
+            _project_completion(root, feature, task["id"], record)
         else:
             todo.append(task)
     if not todo:
@@ -92,7 +101,7 @@ def mark_done(root: Path, feature: str, task_id: str, run_verify: bool = True) -
         return {"task": task_id, "verified": False, "status": "NOT_RUN"}
     previous = _completion(root, feature, task, refresh=True)
     if previous:
-        _project_done(plan, task_id)
+        _project_completion(root, feature, task_id, previous)
         return {"task": task_id, "verified": True, "status": "PASS", "reused": True}
     identity = plan_identity(root, feature)
     candidate = _candidate(root, task)
@@ -108,7 +117,7 @@ def mark_done(root: Path, feature: str, task_id: str, run_verify: bool = True) -
     require_plan_approval(root, feature)
     if plan_identity(root, feature) != identity or _candidate(root, task) != candidate:
         raise SystemExit("E_VERIFY_DRIFT: governing inputs or task source changed during verification")
-    seal_receipt(receipt_path(root, feature, task_id), {
+    completion = seal_receipt(receipt_path(root, feature, task_id), {
         "schema": "specline.task-completion.v2", **identity, "task": task_id,
         "command": task["verify"], "candidate": candidate, "status": "PASS",
         "returncode": proc.returncode,
@@ -117,6 +126,5 @@ def mark_done(root: Path, feature: str, task_id: str, run_verify: bool = True) -
         "verified_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "authority": "local-integrity-only",
     })
-    _project_done(plan, task_id)
-    _append_progress(root, f"DONE {feature} {task_id} verify_pass=true  # context resets now")
+    _project_completion(root, feature, task_id, completion)
     return {"task": task_id, "verified": True, "status": "PASS", "reused": False}

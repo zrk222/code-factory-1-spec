@@ -162,6 +162,35 @@ def test_completion_reuses_receipt_and_recovers_projection(project, monkeypatch)
     assert loop.mark_done(project, "refunds", "T1")["reused"] is True
     assert len(calls) == 1
     assert "- [x] T1 |" in (project / "plans/refunds.md").read_text()
+    assert (project / "context/PROGRESS.md").read_text().count("DONE refunds T1 ") == 1
+    def no_rewrite(*args, **kwargs):
+        pytest.fail("unchanged completion must not rewrite a projection")
+    monkeypatch.setattr(loop, "atomic_text", no_rewrite)
+    assert loop.mark_done(project, "refunds", "T1")["reused"] is True
+
+
+def test_completion_recovers_interrupted_progress_event_once(project, monkeypatch):
+    import subprocess
+    import specline.loop as loop
+    from specline.gates import gate
+
+    gate(project, "plan", "refunds")
+    calls = []
+    def verify(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+    monkeypatch.setattr(loop.subprocess, "run", verify)
+    append = loop._append_progress
+    def interrupted(*args):
+        raise OSError("interrupted progress projection")
+    monkeypatch.setattr(loop, "_append_progress", interrupted)
+    with pytest.raises(OSError, match="interrupted progress"):
+        loop.mark_done(project, "refunds", "T1")
+    monkeypatch.setattr(loop, "_append_progress", append)
+    assert loop.next_task(project, "refunds")["task"] == "T2"
+    assert loop.mark_done(project, "refunds", "T1")["reused"] is True
+    assert len(calls) == 1
+    assert (project / "context/PROGRESS.md").read_text().count("DONE refunds T1 ") == 1
 
 
 def test_completion_rejects_changed_task_source(project):
@@ -207,6 +236,10 @@ def test_explicit_completion_reverifies_changed_source(project, monkeypatch, ret
         assert receipt.read_bytes() != original
         assert next_task(project, "refunds")["task"] == "T2"
     assert len(calls) == 1
+
+    assert (project / "context/PROGRESS.md").read_text().count("DONE refunds T1 ") == (
+        1 if returncode else 2
+    )
 
 
 @pytest.mark.parametrize("skip", [False, True])
