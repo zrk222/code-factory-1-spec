@@ -5,62 +5,19 @@ command — under a hard token budget. One packet == one agent session."""
 from __future__ import annotations
 import hashlib, re
 from pathlib import Path
+from .plan_lint import contained_path, task_path_errors
 
 TOKEN_BUDGET = 2200   # ~ chars/4; hard cap for a packet
 CHARS_PER_TOKEN = 4
 
 def _est_tokens(s: str) -> int:
-    return len(s) // CHARS_PER_TOKEN
+    return (len(s) + CHARS_PER_TOKEN - 1) // CHARS_PER_TOKEN
 
-def _relevant_spec_excerpt(spec_text: str, task_text: str, max_chars: int = 2600) -> str:
-    """Requirement-scoped excerpt (anti-drift).
-
-    The old version matched individual LINES by shared vocabulary, which could
-    hand the agent a half-requirement (condition stripped off), forcing it to
-    improvise the rest. This version selects WHOLE requirement blocks and always
-    ships the complete acceptance scenario intact. The agent never receives a
-    partial rule.
-    """
-    words = {w.lower() for w in re.findall(r"[A-Za-z]{4,}", task_text)}
-    lines = spec_text.splitlines()
-
-    gherkin_block, in_g = [], False
-    for line in lines:
-        if line.strip().startswith("```gherkin"):
-            in_g = True
-        if in_g:
-            gherkin_block.append(line)
-        if in_g and line.strip() == "```" and not line.strip().startswith("```g"):
-            in_g = False
-
-    req_block, i = [], 0
-    while i < len(lines):
-        line = lines[i]
-        if line.lstrip().startswith("- "):
-            block = [line]; j = i + 1
-            while j < len(lines) and lines[j].startswith(("  ", "\t")) and not lines[j].lstrip().startswith("- "):
-                block.append(lines[j]); j += 1
-            bw = {w.lower() for w in re.findall(r"[A-Za-z]{4,}", " ".join(block))}
-            if words & bw:
-                req_block.extend(block)
-            i = j
-        else:
-            i += 1
-
-    parts = []
-    if req_block:
-        parts.append("### Governing requirements (complete blocks)\n" + "\n".join(req_block))
-    if gherkin_block:
-        parts.append("### Acceptance (verbatim — do not reinterpret)\n" + "\n".join(gherkin_block))
-    out = "\n\n".join(parts) if parts else "\n".join(l for l in lines if l.lstrip().startswith("- "))
-    if len(out) > max_chars:
-        kept, total = [], 0
-        for para in out.split("\n\n"):
-            if total + len(para) > max_chars:
-                break
-            kept.append(para); total += len(para) + 2
-        out = "\n\n".join(kept) if kept else out[:max_chars]
-    return out
+def _relevant_spec_excerpt(spec_text: str, task_text: str, max_chars: int | None = None) -> str:
+    """Preserve all governing context; lexical overlap cannot prove relevance."""
+    if max_chars is not None and len(spec_text) > max_chars:
+        raise SystemExit("E_PACKET_BUDGET: split the governing spec; never truncate obligations")
+    return spec_text
 
 CONSTITUTION_DIGEST = (
     "CONSTITUTION DIGEST: one task only; read ONLY listed files; tests ship with code; "
@@ -69,8 +26,22 @@ CONSTITUTION_DIGEST = (
 )
 
 def build_packet(root: Path, feature: str, task: dict) -> tuple[Path, dict]:
-    root = Path(root)
-    spec_text = (root/"specs"/f"{feature}.md").read_text()
+    root = Path(root).resolve()
+    if (not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", feature)
+            or not re.fullmatch(r"T\d+", task["id"])):
+        raise SystemExit("E_PACKET_ID: invalid feature or task identity")
+    errors = task_path_errors(root, task)
+    if errors:
+        raise SystemExit("\n".join(errors))
+    try:
+        spec = contained_path(root, f"specs/{feature}.md")
+        packet_path = root / "packets" / f"{feature}-{task['id']}.md"
+        out = contained_path(root, f"packets/{feature}-{task['id']}.md")
+        if (root / "packets").resolve() != root / "packets" or out != packet_path:
+            raise ValueError("packet output redirects through a link")
+    except (ValueError, OSError, RuntimeError) as exc:
+        raise SystemExit("E_PACKET_PATH: unsafe specification or packet path") from exc
+    spec_text = spec.read_text()
     excerpt = _relevant_spec_excerpt(spec_text, task["text"])
     files_block = "\n".join(f"- {f}" for f in task["files"]) or "- (new files in slice)"
     body = f"""# TASK PACKET {task['id']} — {feature}
@@ -85,7 +56,7 @@ def build_packet(root: Path, feature: str, task: dict) -> tuple[Path, dict]:
 ## Files in scope (R_f — read nothing else except context/PROGRESS.md)
 {files_block}
 
-## Governing spec excerpt
+## Complete governing specification
 {excerpt}
 
 ## {CONSTITUTION_DIGEST}
@@ -95,11 +66,10 @@ Run: `{task['verify']}` — must pass. Then STOP and report the diff summary.
 """
     est = _est_tokens(body)
     if est > TOKEN_BUDGET:
-        # deterministic prune: shrink excerpt first (same discipline as HSF context assembler)
-        overflow = (est - TOKEN_BUDGET) * CHARS_PER_TOKEN
-        body = body.replace(excerpt, excerpt[: max(len(excerpt) - overflow, 400)])
-        est = _est_tokens(body)
-    out = root/"packets"/f"{feature}-{task['id']}.md"
+        raise SystemExit(
+            f"E_PACKET_BUDGET: packet estimates {est} tokens (limit {TOKEN_BUDGET}); "
+            "split the feature/spec and re-approve its plan; no requirements were truncated"
+        )
     out.parent.mkdir(exist_ok=True)
     out.write_text(body)
     meta = {"packet": str(out), "tokens_est": est,
