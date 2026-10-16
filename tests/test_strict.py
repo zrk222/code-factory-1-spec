@@ -25,6 +25,9 @@ Processes refund requests for the `Customer` role against an `Order`.
 ### User roles
 - Customer
 
+### Authorized parameters
+- REFUND_LIMIT = 500
+
 ### Requirements (EARS)
 - When a refund request exceeds `500` dollars, the system shall reject the request and return `403`.
 - If the `Order` is older than `90` days, the system shall reject the refund and return `403`.
@@ -196,6 +199,95 @@ def test_audit_accepts_authorized_number(tmp_path):
     assert not any(b.code == "A_INVENTED_PARAM" for b in rep.blocks)
 
 
+def test_audit_does_not_cross_authorize_unrelated_spec_numbers(tmp_path):
+    spec = _spec(tmp_path, GOOD + "\nAcceptance note: 30 seconds is enough.\n")
+    code = tmp_path / "refund" / "logic.py"
+    code.parent.mkdir(parents=True, exist_ok=True)
+    code.write_text("timeout = 500\n", encoding="utf-8")
+    rep = audit_code_against_spec(spec, [code], slice_prefix="refund")
+    assert any(b.code == "A_INVENTED_PARAM" for b in rep.blocks)
+
+
+def test_audit_maps_nested_tuple_values_by_position_and_blocks_dynamic_shapes(tmp_path):
+    spec = _spec(tmp_path, GOOD)
+    code = tmp_path / "refund" / "logic.py"
+    code.parent.mkdir(parents=True, exist_ok=True)
+    code.write_text("timeout, other = 5, 99\nconfig, (MAX_RETRIES, rest) = 1, (7, 8)\n")
+    rep = audit_code_against_spec(spec, [code], slice_prefix="refund")
+    invented = [b.message for b in rep.blocks if b.code == "A_INVENTED_PARAM"]
+    assert any("timeout" in message and "5" in message for message in invented)
+    assert not any("timeout to 99" in message for message in invented)
+    assert any("MAX_RETRIES" in message and "7" in message for message in invented)
+    code.write_text("timeout, other = dynamic_values\n")
+    unknown = audit_code_against_spec(spec, [code], slice_prefix="refund")
+    assert any(b.code == "A_INVENTED_PARAM" and "unknown" in b.message for b in unknown.blocks)
+
+
+def test_audit_parameter_rename_with_same_literal_is_new_drift(tmp_path):
+    spec = _spec(tmp_path, GOOD)
+    code = tmp_path / "refund" / "logic.py"
+    code.parent.mkdir(parents=True, exist_ok=True)
+    code.write_text("timeout = 500\n", encoding="utf-8")
+    baseline = {str(code): b"legacy_value = 500\n"}
+    rep = audit_code_against_spec(spec, [code], baseline_files=baseline)
+    assert any(b.code == "A_INVENTED_PARAM" and "timeout" in b.message for b in rep.blocks)
+
+
+def test_audit_parameter_rename_detects_multiline_literal_on_unchanged_line(tmp_path):
+    spec = _spec(tmp_path, GOOD)
+    code = tmp_path / "refund" / "logic.py"
+    code.parent.mkdir(parents=True, exist_ok=True)
+    code.write_text("timeout = (\n    500\n)\n", encoding="utf-8")
+    baseline = {str(code): b"legacy_value = (\n    500\n)\n"}
+    rep = audit_code_against_spec(spec, [code], baseline_files=baseline)
+    assert any(b.code == "A_INVENTED_PARAM" and "timeout" in b.message for b in rep.blocks)
+
+
+def test_audit_flags_parameter_fact_moved_between_function_scopes(tmp_path):
+    spec = _spec(tmp_path, GOOD)
+    code = tmp_path / "refund" / "logic.py"
+    code.parent.mkdir(parents=True, exist_ok=True)
+    code.write_text("def new_policy():\n    timeout = 5\n", encoding="utf-8")
+    baseline = {str(code): b"def old_policy():\n    timeout = 5\n"}
+    rep = audit_code_against_spec(spec, [code], baseline_files=baseline)
+    assert any(b.code == "A_INVENTED_PARAM" and "timeout" in b.message for b in rep.blocks)
+
+
+def test_repetitive_baseline_line_comparison_is_bounded_linear_work(tmp_path):
+    spec = _spec(tmp_path, GOOD)
+    code = tmp_path / "refund" / "logic.py"
+    code.parent.mkdir(parents=True, exist_ok=True)
+    baseline = ("# repeated\n" * 50_000) + "legacy_value = 500\n"
+    current = ("# repeated\n" * 50_000) + "timeout = 500\n"
+    code.write_text(current, encoding="utf-8")
+    rep = audit_code_against_spec(
+        spec, [code], baseline_files={str(code): baseline.encode("utf-8")}
+    )
+    assert any(b.code == "A_INVENTED_PARAM" and "timeout" in b.message for b in rep.blocks)
+
+
+def test_audit_rejects_invalid_python_baseline_explicitly(tmp_path):
+    import pytest
+
+    spec = _spec(tmp_path, GOOD)
+    code = tmp_path / "refund" / "logic.py"
+    code.parent.mkdir(parents=True, exist_ok=True)
+    code.write_text("timeout = 500\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="baseline Python file cannot be parsed"):
+        audit_code_against_spec(spec, [code], baseline_files={str(code): b"x = (\n"})
+
+
+def test_audit_maps_attribute_targets_in_tuple_destructuring(tmp_path):
+    spec = _spec(tmp_path, GOOD)
+    code = tmp_path / "refund" / "logic.py"
+    code.parent.mkdir(parents=True, exist_ok=True)
+    code.write_text("settings.timeout, other = 5, 99\n", encoding="utf-8")
+    rep = audit_code_against_spec(spec, [code], slice_prefix="refund")
+    assert any(b.code == "A_INVENTED_PARAM" and "timeout" in b.message and "5" in b.message
+               for b in rep.blocks)
+    assert not any("timeout to 99" in b.message for b in rep.blocks)
+
+
 def test_audit_flags_scope_escape(tmp_path):
     spec = _spec(tmp_path, GOOD)
     code = tmp_path / "billing" / "other.py"
@@ -212,6 +304,83 @@ def test_audit_flags_stub(tmp_path):
     code.write_text("def refund():\n    raise NotImplementedError\n")
     rep = audit_code_against_spec(spec, [code], slice_prefix="refund")
     assert any(b.code == "A_STUB_LEFT" for b in rep.blocks)
+
+
+def test_audit_stub_detection_ignores_strings_and_interface_contracts(tmp_path):
+    spec = _spec(tmp_path, GOOD)
+    code = tmp_path / "refund" / "logic.py"
+    code.parent.mkdir(parents=True, exist_ok=True)
+    code.write_text(
+        '"""TODO: historical note"""\n# fixed TODO in this explanation\n'
+        'LABEL = "NotImplementedError"\n'
+        'from abc import abstractmethod\n'
+        'from typing import Protocol\n'
+        'class Contract(Protocol):\n'
+        '    def execute(self):\n'
+        '        raise NotImplementedError\n'
+        'class Base:\n'
+        '    @abstractmethod\n'
+        '    def run(self):\n'
+        '        raise NotImplementedError\n'
+        'from abc import ABC\n'
+        'class ConcreteABC(ABC):\n'
+        '    def execute(self):\n'
+        '        raise NotImplementedError\n'
+    )
+    rep = audit_code_against_spec(spec, [code], slice_prefix="refund")
+    assert sum(b.code == "A_STUB_LEFT" for b in rep.blocks) == 1
+    assert any("execute" in b.message for b in rep.blocks)
+
+
+def test_audit_does_not_trust_unbound_abstractmethod_or_protocol_names(tmp_path):
+    spec = _spec(tmp_path, GOOD)
+    code = tmp_path / "refund" / "logic.py"
+    code.parent.mkdir(parents=True, exist_ok=True)
+    code.write_text(
+        'class Protocol:\n'
+        '    def execute(self):\n'
+        '        raise NotImplementedError\n'
+        'def abstractmethod(fn):\n'
+        '    return fn\n'
+        '@abstractmethod\n'
+        'def concrete():\n'
+        '    raise NotImplementedError\n',
+        encoding="utf-8",
+    )
+    rep = audit_code_against_spec(spec, [code], slice_prefix="refund")
+    assert sum(b.code == "A_STUB_LEFT" for b in rep.blocks) == 2
+
+
+def test_audit_stub_contract_resolution_handles_nested_and_shadowed_names(tmp_path):
+    spec = _spec(tmp_path, GOOD)
+    code = tmp_path / "refund" / "logic.py"
+    code.parent.mkdir(parents=True, exist_ok=True)
+    code.write_text(
+        'from abc import abstractmethod\n'
+        'from typing import Protocol\n'
+        'def abstractmethod(fn):\n'
+        '    return fn\n'
+        'class Protocol:\n'
+        '    pass\n'
+        '@abstractmethod\n'
+        'def unfinished():\n'
+        '    raise NotImplementedError\n'
+        'class Nested(pkg.interfaces.Base):\n'
+        '    def execute(self):\n'
+        '        raise NotImplementedError\n',
+        encoding="utf-8",
+    )
+    rep = audit_code_against_spec(spec, [code], slice_prefix="refund")
+    assert sum(b.code == "A_STUB_LEFT" for b in rep.blocks) == 2
+
+
+def test_audit_still_flags_ordinary_not_implemented_raise_and_todo_comment(tmp_path):
+    spec = _spec(tmp_path, GOOD)
+    code = tmp_path / "refund" / "logic.py"
+    code.parent.mkdir(parents=True, exist_ok=True)
+    code.write_text("# TODO: finish this\ndef execute():\n    raise NotImplementedError\n")
+    rep = audit_code_against_spec(spec, [code], slice_prefix="refund")
+    assert sum(b.code == "A_STUB_LEFT" for b in rep.blocks) == 2
 
 
 def test_audit_ast_ignores_string_numbers_and_subscripts(tmp_path):
@@ -332,6 +501,154 @@ def test_audit_cli_accepts_explicit_full_base_commit(tmp_path, capsys):
         main(["audit", "feat", "--root", str(tmp_path), "--files", str(code),
               "--base-commit", base, "--json"])
     assert "A_INVENTED_PARAM" in capsys.readouterr().out
+
+
+def test_git_baseline_read_has_deadline_and_aggregate_file_cap(tmp_path, monkeypatch):
+    from specline import drift_audit
+
+    def timeout(*args, **kwargs):
+        raise drift_audit.subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+
+    monkeypatch.setattr(drift_audit.subprocess, "run", timeout)
+    with pytest.raises(ValueError, match="inventory exceeded its time limit"):
+        drift_audit._read_baseline_blob(tmp_path, "a" * 40, "x.py")
+
+    monkeypatch.undo()
+    too_many = [tmp_path / f"file-{index}.py" for index in range(257)]
+    with pytest.raises(ValueError, match="file count exceeds"):
+        drift_audit.load_git_baselines(tmp_path, too_many, "a" * 40)
+
+
+def test_git_baseline_uses_literal_path_and_two_bounded_processes(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from specline import drift_audit
+
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        assert kwargs["shell"] is False
+        assert kwargs["timeout"] <= drift_audit._GIT_TIMEOUT_SECONDS
+        if "ls-tree" in argv:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=b"100644 blob " + b"a" * 40 + b" 1\tglob[*].py\0",
+            )
+        return SimpleNamespace(returncode=0, stdout=b"x")
+
+    monkeypatch.setattr(drift_audit.subprocess, "run", run)
+    data = drift_audit._read_baseline_blob(tmp_path, "a" * 40, "glob[*].py")
+    assert data == b"x"
+    assert len(calls) == 2
+    assert calls[0][0][:2] == ["git", "--literal-pathspecs"]
+
+
+def test_git_baseline_passes_remaining_aggregate_budget_to_each_child(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from specline import drift_audit
+
+    calls = []
+    times = iter([1.0, 3.0])
+    monkeypatch.setattr(drift_audit.time, "monotonic", lambda: next(times))
+
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs["timeout"]))
+        if "ls-tree" in argv:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=b"100644 blob " + b"a" * 40 + b" 1\tfile.py\0",
+            )
+        return SimpleNamespace(returncode=0, stdout=b"x")
+
+    monkeypatch.setattr(drift_audit.subprocess, "run", run)
+    data = drift_audit._read_baseline_blob(
+        tmp_path, "a" * 40, "file.py", deadline=5.0
+    )
+    assert data == b"x"
+    assert [timeout for _argv, timeout in calls] == [4.0, 2.0]
+
+
+def test_git_baseline_rejects_explicit_zero_deadline(tmp_path, monkeypatch):
+    from specline import drift_audit
+
+    monkeypatch.setattr(drift_audit.time, "monotonic", lambda: 1.0)
+    with pytest.raises(ValueError, match="aggregate time limit"):
+        drift_audit._read_baseline_blob(tmp_path, "a" * 40, "file.py", deadline=0.0)
+
+
+def test_git_baseline_forward_slash_api_keys_resolve_for_windows_paths(tmp_path):
+    import subprocess
+    from specline.drift_audit import audit_code_against_spec, load_git_baselines
+
+    _spec(tmp_path, GOOD)
+    code = tmp_path / "refund" / "logic.py"
+    code.parent.mkdir(parents=True, exist_ok=True)
+    code.write_text("timeout = 7\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "specs/feat.md", "refund/logic.py"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                    "commit", "-qm", "baseline"], cwd=tmp_path, check=True)
+    base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True,
+                          capture_output=True, text=True).stdout.strip()
+    code.write_text("timeout = 8\n", encoding="utf-8")
+    baselines = load_git_baselines(tmp_path, ["refund/logic.py"], base)
+    assert str(code.resolve()) in baselines
+    rep = audit_code_against_spec(
+        tmp_path / "specs/feat.md", [code], slice_prefix="refund", baseline_files=baselines
+    )
+    assert any(b.code == "A_INVENTED_PARAM" for b in rep.blocks)
+
+
+def test_git_baseline_rejects_multiple_literal_path_results(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import pytest
+    from specline import drift_audit
+
+    monkeypatch.setattr(
+        drift_audit.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=(
+                b"100644 blob " + b"a" * 40 + b" 1\tfile.py\0"
+                b"100644 blob " + b"b" * 40 + b" 1\tfile.py\0"
+            ),
+        ),
+    )
+    with pytest.raises(ValueError, match="multiple or malformed"):
+        drift_audit._read_baseline_blob(tmp_path, "a" * 40, "file.py")
+
+
+def test_git_baseline_total_bytes_are_bounded(tmp_path, monkeypatch):
+    from specline import drift_audit
+
+    files = []
+    for index in range(17):
+        path = tmp_path / f"file-{index}.py"
+        path.write_text("x", encoding="utf-8")
+        files.append(path)
+    monkeypatch.setattr(
+        drift_audit, "_read_baseline_blob",
+        lambda *_args: b"x" * drift_audit._MAX_BASELINE_BYTES,
+    )
+    with pytest.raises(ValueError, match="aggregate size limit"):
+        drift_audit.load_git_baselines(tmp_path, files, "a" * 40)
+
+
+def test_git_baseline_reads_have_one_aggregate_deadline(tmp_path, monkeypatch):
+    import pytest
+    from specline import drift_audit
+
+    files = []
+    for index in range(2):
+        path = tmp_path / f"file-{index}.py"
+        path.write_text("x", encoding="utf-8")
+        files.append(path)
+    ticks = iter([0.0, 15.0, 30.0])
+    monkeypatch.setattr(drift_audit.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(drift_audit, "_read_baseline_blob", lambda *_args: b"x")
+    with pytest.raises(ValueError, match="aggregate time limit"):
+        drift_audit.load_git_baselines(tmp_path, files, "a" * 40)
 
 
 def test_strict_attribution_localizes_requirement_verbatim(tmp_path):
