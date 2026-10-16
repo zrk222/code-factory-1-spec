@@ -12,6 +12,16 @@ def _emit_version(as_json: bool) -> None:
     payload = provenance()
     print(json.dumps(payload, indent=2, sort_keys=True) if as_json else f"specline {payload['version']}")
 
+def _run_version(args):
+    _emit_version(args.json)
+
+def _run_evidence(args):
+    from .acceptance import catalogue, export_acceptance_envelope
+    root = Path(args.root)
+    result = (catalogue(root, args.feature) if args.catalog else
+              export_acceptance_envelope(root, args.feature, args.contract, args.observations))
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == "--version":
@@ -63,6 +73,13 @@ def main(argv=None):
     s = sub.add_parser("handoff", help="emit HSF workflow spec from decision table")
     s.add_argument("feature"); s.add_argument("--root", default=".")
 
+    s = sub.add_parser("evidence", help="export current declared acceptance evidence for CF/ForgeLine")
+    s.set_defaults(handler=_run_evidence)
+    s.add_argument("feature"); s.add_argument("--root", default=".")
+    s.add_argument("--catalog", action="store_true", help="show exact required check IDs/text without writing")
+    s.add_argument("--contract", default=".factory/workflow-audit-contract.json")
+    s.add_argument("--observations", default=".factory/workflow-audit-observations.json")
+
     s = sub.add_parser("agent", help="wire into an agent harness (claude|codex|<name>)")
     s.add_argument("name"); s.add_argument("--root", default=".")
 
@@ -77,13 +94,14 @@ def main(argv=None):
     s.add_argument("--json", action="store_true")
 
     s = sub.add_parser("version", help="show package provenance")
+    s.set_defaults(handler=_run_version)
     s.add_argument("--json", action="store_true")
 
     a = p.parse_args(argv)
     root = Path(getattr(a, "root", "."))
 
-    if a.cmd == "version":
-        _emit_version(a.json)
+    if getattr(a, "handler", None):
+        a.handler(a)
     elif a.cmd == "init":
         from .scaffold import init_project
         created = init_project(root)

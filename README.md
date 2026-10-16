@@ -240,3 +240,24 @@ specline audit my_feature --files slices/my_feature/logic.py --json
 
 [![CI](https://github.com/zrk222/code-factory-1-spec/actions/workflows/ci.yaml/badge.svg)](https://github.com/zrk222/code-factory-1-spec/actions/workflows/ci.yaml)
 [![PyPI](https://img.shields.io/pypi/v/code-factory-1-spec.svg)](https://pypi.org/project/code-factory-1-spec/)
+
+
+## Declared acceptance evidence across CF and ForgeLine
+
+After approving a plan, use `specline evidence <feature> --catalog` to obtain the
+exact check IDs and requirement/scenario text. Record each check/profile in the
+existing CF workflow-audit contract and observations, linking its current task
+completion receipt. Verify all planned tasks and include their files plus the
+specification and plan in the workflow candidate.
+
+`specline evidence <feature>` validates those records and writes the local
+`envelopes/<feature>.json`. Optional `--contract` and `--observations` arguments
+select contained workflow files. ForgeLine and CF consume the same read-only
+validator and reject stale, copied, incomplete or resealed mismatched evidence.
+Absent CF support is reported as unsupported; ordinary SpecLine commands still
+work without CF. No command is rerun during evidence validation.
+
+This establishes explicit declared acceptance links and current record hashes.
+It does not independently observe the results, prove semantic correctness,
+certify software, or authorize delivery. File-based receipts assume a trusted
+local runtime; a hostile process with write access is outside this guarantee.
