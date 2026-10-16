@@ -2,6 +2,7 @@
 Each test targets one of the five holes that let the AI coder invent parameters.
 """
 from pathlib import Path
+import pytest
 import textwrap
 from specline.strict_lint import strict_validate
 from specline.drift_audit import audit_code_against_spec
@@ -211,6 +212,126 @@ def test_audit_flags_stub(tmp_path):
     code.write_text("def refund():\n    raise NotImplementedError\n")
     rep = audit_code_against_spec(spec, [code], slice_prefix="refund")
     assert any(b.code == "A_STUB_LEFT" for b in rep.blocks)
+
+
+def test_audit_ast_ignores_string_numbers_and_subscripts(tmp_path):
+    spec = _spec(tmp_path, GOOD)
+    code = tmp_path / "refund" / "logic.py"
+    code.parent.mkdir(parents=True, exist_ok=True)
+    code.write_text('encoding = "utf-8"\nitem = values[3]\n')
+    rep = audit_code_against_spec(spec, [code], slice_prefix="refund")
+    assert not any(b.code == "A_INVENTED_PARAM" for b in rep.blocks)
+
+
+def test_audit_baseline_checks_only_added_or_changed_parameter_lines(tmp_path):
+    spec = _spec(tmp_path, GOOD)
+    code = tmp_path / "refund" / "logic.py"
+    code.parent.mkdir(parents=True, exist_ok=True)
+    code.write_text("timeout = 6\n", encoding="utf-8")
+    baseline = {str(code): b"timeout = 6\n"}
+    same = audit_code_against_spec(spec, [code], baseline_files=baseline)
+    assert not any(b.code == "A_INVENTED_PARAM" for b in same.blocks)
+    code.write_text("timeout = 7\n", encoding="utf-8")
+    changed = audit_code_against_spec(spec, [code], baseline_files=baseline)
+    assert any(b.code == "A_INVENTED_PARAM" for b in changed.blocks)
+
+
+def test_audit_baseline_new_file_and_todo_still_block(tmp_path):
+    spec = _spec(tmp_path, GOOD)
+    code = tmp_path / "refund" / "logic.py"
+    code.parent.mkdir(parents=True, exist_ok=True)
+    code.write_text("retries = 7\n# TODO: finish\n", encoding="utf-8")
+    rep = audit_code_against_spec(spec, [code], baseline_files={str(code): None})
+    assert {b.code for b in rep.blocks} >= {"A_INVENTED_PARAM", "A_STUB_LEFT"}
+
+
+def test_audit_rejects_invalid_utf8_baseline(tmp_path):
+    spec = _spec(tmp_path, GOOD)
+    code = tmp_path / "refund" / "logic.py"
+    code.parent.mkdir(parents=True, exist_ok=True)
+    code.write_text("retries = 7\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="UTF-8"):
+        audit_code_against_spec(spec, [code], baseline_files={str(code): b"\xff"})
+    with pytest.raises(ValueError, match="missing an explicit entry"):
+        audit_code_against_spec(spec, [code], baseline_files={})
+
+
+def test_audit_handles_annotation_without_value_and_attribute_config(tmp_path):
+    spec = _spec(tmp_path, GOOD)
+    code = tmp_path / "refund" / "logic.py"
+    code.parent.mkdir(parents=True, exist_ok=True)
+    code.write_text("MAX_RETRIES: int\nself.timeout = 7\n", encoding="utf-8")
+    rep = audit_code_against_spec(spec, [code])
+    assert sum(b.code == "A_INVENTED_PARAM" for b in rep.blocks) == 1
+    assert any("timeout" in b.message for b in rep.blocks)
+
+
+def test_audit_toml_ignores_quoted_dependency_version_but_flags_numeric_timeout(tmp_path):
+    spec = _spec(tmp_path, GOOD)
+    config = tmp_path / "pyproject.toml"
+    config.write_text('[project]\ndependencies = ["sample>=7"]\n', encoding="utf-8")
+    safe = audit_code_against_spec(spec, [config])
+    assert not any(b.code == "A_INVENTED_PARAM" for b in safe.blocks)
+    config.write_text('[project]\ndependencies = ["sample>=7"]\n[tool.service]\ntimeout = 7\n',
+                      encoding="utf-8")
+    changed = audit_code_against_spec(spec, [config])
+    assert any(b.code == "A_INVENTED_PARAM" and "timeout" in b.message for b in changed.blocks)
+
+
+def test_audit_javascript_config_ignores_strings_and_comments_but_flags_constant(tmp_path):
+    spec = _spec(tmp_path, GOOD)
+    code = tmp_path / "refund" / "settings.js"
+    code.parent.mkdir(parents=True, exist_ok=True)
+    code.write_text('const note = "MAX_RETRIES = 8"; // timeout = 9\nconst MAX_RETRIES = 7;\n',
+                    encoding="utf-8")
+    rep = audit_code_against_spec(spec, [code])
+    assert sum(b.code == "A_INVENTED_PARAM" for b in rep.blocks) == 1
+    assert any("MAX_RETRIES" in b.message for b in rep.blocks)
+
+
+def test_audit_multiline_python_value_checks_changed_literal_line(tmp_path):
+    spec = _spec(tmp_path, GOOD)
+    code = tmp_path / "refund" / "logic.py"
+    code.parent.mkdir(parents=True, exist_ok=True)
+    code.write_text("MAX_RETRIES = (\n    7\n)\n", encoding="utf-8")
+    baseline = {str(code): b"MAX_RETRIES = (\n    500\n)\n"}
+    rep = audit_code_against_spec(spec, [code], baseline_files=baseline)
+    assert any(b.code == "A_INVENTED_PARAM" and b.line == 2 for b in rep.blocks)
+
+
+def test_audit_baseline_mode_rejects_current_and_baseline_over_one_megabyte(tmp_path):
+    spec = _spec(tmp_path, GOOD)
+    code = tmp_path / "refund" / "logic.py"
+    code.parent.mkdir(parents=True, exist_ok=True)
+    oversized = b"x" * 1_000_001
+    code.write_bytes(oversized)
+    with pytest.raises(ValueError, match="current file exceeds"):
+        audit_code_against_spec(spec, [code], baseline_files={str(code): b""})
+    code.write_text("retries = 7\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="baseline file exceeds"):
+        audit_code_against_spec(spec, [code], baseline_files={str(code): oversized})
+
+
+def test_audit_cli_accepts_explicit_full_base_commit(tmp_path, capsys):
+    import subprocess
+
+    from specline.cli import main
+
+    _spec(tmp_path, GOOD)
+    code = tmp_path / "refund" / "logic.py"
+    code.parent.mkdir(parents=True, exist_ok=True)
+    code.write_text("retries = 6\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "specs/feat.md", "refund/logic.py"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                    "commit", "-qm", "baseline"], cwd=tmp_path, check=True)
+    base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True,
+                          capture_output=True, text=True).stdout.strip()
+    code.write_text("retries = 7\n", encoding="utf-8")
+    with pytest.raises(SystemExit, match="AUDIT FAILED"):
+        main(["audit", "feat", "--root", str(tmp_path), "--files", str(code),
+              "--base-commit", base, "--json"])
+    assert "A_INVENTED_PARAM" in capsys.readouterr().out
 
 
 def test_strict_attribution_localizes_requirement_verbatim(tmp_path):

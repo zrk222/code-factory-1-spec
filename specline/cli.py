@@ -56,6 +56,8 @@ def main(argv=None):
     s.add_argument("feature"); s.add_argument("--root", default=".")
     s.add_argument("--files", nargs="+", required=True, help="changed files to audit")
     s.add_argument("--slice", default=None, help="authorized slice prefix")
+    s.add_argument("--base-commit", default=None,
+                   help="full 40-character Git commit used to limit parameter checks to changed lines")
     s.add_argument("--json", action="store_true", help="emit machine-readable attribution")
 
     s = sub.add_parser("tasks", help="lint plan task atomicity")
@@ -166,12 +168,25 @@ def main(argv=None):
         if not payload["passed"]:
             raise SystemExit(1)
     elif a.cmd == "audit":
-        from .drift_audit import audit_code_against_spec, audit_report_lines
-        rep = audit_code_against_spec(root/"specs"/f"{a.feature}.md",
-                                      [Path(f) for f in a.files], slice_prefix=a.slice)
+        from .drift_audit import audit_code_against_spec, audit_report_lines, load_git_baselines
+        code_files = [Path(f) for f in a.files]
+        baseline_files = None
+        if a.base_commit:
+            try:
+                workspace_root = root.resolve()
+                code_files = [p if p.is_absolute() else workspace_root / p for p in code_files]
+                baseline_files = load_git_baselines(workspace_root, code_files, a.base_commit)
+            except ValueError as exc:
+                raise SystemExit(f"INVALID BASELINE: {exc}") from exc
+        try:
+            rep = audit_code_against_spec(root/"specs"/f"{a.feature}.md",
+                                          code_files, slice_prefix=a.slice,
+                                          baseline_files=baseline_files)
+        except ValueError as exc:
+            raise SystemExit(f"INVALID BASELINE OR SOURCE: {exc}") from exc
         if a.json:
             print(json.dumps({"passed": rep.ok,
-                              "attribution": rep.attribution([Path(f) for f in a.files]).to_dict()},
+                              "attribution": rep.attribution(code_files).to_dict()},
                              indent=2))
         for line in audit_report_lines(rep):
             print(line)
