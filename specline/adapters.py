@@ -2,7 +2,6 @@
 any agent harness. The constitution IS the agent config; packets are the
 session protocol; slash commands make the loop one keystroke."""
 from __future__ import annotations
-import shutil
 from pathlib import Path
 
 CLAUDE_NEXT_CMD = """Read context/PROGRESS.md, then run `specline loop next <feature>`.
