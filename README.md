@@ -195,7 +195,15 @@ empty implementation; a hollow validator passes against a mutilated spec.
 Compares what shipped against what the contract authorized:
 
 - **`A_INVENTED_PARAM`** â€” a config value (`TIMEOUT = 45`) whose number the spec never
-  authorized. The coder guessed; the audit fails the build.
+  authorized for that parameter. Numeric values in unrelated requirements or acceptance
+  text do not authorize it. Declare intentional numeric parameters under an exact
+  `### Authorized parameters` heading as `- TIMEOUT = 45`; older specs that relied on any
+  number anywhere in the document must add these explicit parameter facts before passing
+  drift audit. Destructured assignments are paired by position; dynamic or mismatched
+  shapes are reported as unknown. Baseline reads are limited to 256 files, 1 MB per file,
+  16 MB total, a 30-second aggregate Git deadline, and a 4096-byte path. Python parameter
+  comparisons use counted semantic candidates; other file comparisons use counted lines so
+  repetitive input does not trigger quadratic diff work.
 - **`A_SCOPE_ESCAPE`** â€” a file outside the task's authorized slice.
 - **`A_UNAUTHORIZED_FILE`** â€” a file not in the packet's list.
 - **`A_STUB_LEFT`** â€” a `TODO`/`NotImplementedError` left behind.
