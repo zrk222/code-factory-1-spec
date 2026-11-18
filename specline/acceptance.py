@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import hashlib
 import io
+from itertools import chain
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -28,19 +30,28 @@ def digest(value) -> str:
 
 
 def _code_identity(package: Path) -> dict:
-    files = sorted(package.rglob("*.py"))
-    if len(files) > 1024:
-        raise SystemExit("E_ACCEPTANCE_BUDGET: verifier package exceeds file bound")
+    """Hash the verifier's Python files without constructing a Path per entry."""
+    root = os.fspath(package)
+    prefix_length = len(os.path.join(root, ""))
+    files = []
+    for directory, subdirectories, filenames in os.walk(root, followlinks=False):
+        for name in chain(subdirectories, filenames):
+            if os.path.normcase(name).endswith(".py"):
+                files.append(os.path.join(directory[prefix_length:], name))
+                if len(files) > 1024:
+                    raise SystemExit("E_ACCEPTANCE_BUDGET: verifier package exceeds file bound")
+    files.sort(key=lambda path: os.path.normcase(path).split(os.sep))
     manifest, total = {}, 0
-    for path in files:
+    buffer = memoryview(bytearray(128 * 1024))
+    for relative in files:
         checksum = hashlib.sha256()
-        with path.open("rb") as stream:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                total += len(chunk)
+        with open(os.path.join(root, relative), "rb") as stream:
+            while size := stream.readinto(buffer):
+                total += size
                 if total > 64 * 1024 * 1024:
                     raise SystemExit("E_ACCEPTANCE_BUDGET: verifier package exceeds byte bound")
-                checksum.update(chunk)
-        manifest[path.relative_to(package).as_posix()] = checksum.hexdigest()
+                checksum.update(buffer[:size])
+        manifest[relative.replace(os.sep, "/")] = checksum.hexdigest()
     return manifest
 
 
