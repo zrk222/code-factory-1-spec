@@ -148,7 +148,7 @@ def _workflow(root, feature, contract_path, observations_path, obligations, sour
     verifier = _verifier()
     verifier_hash = hashlib.sha256(Path(verifier.__file__).read_bytes()).hexdigest()
     try:
-        receipt, contract, observations = _audited_documents(
+        receipt, contract, observations, inputs_current = _audited_documents(
             verifier, root, contract_path, observations_path
         )
     except (ValueError, OSError, TypeError, KeyError) as exc:
@@ -168,13 +168,16 @@ def _workflow(root, feature, contract_path, observations_path, obligations, sour
         "observations": {"path": observations_path, "sha256": receipt["observations_sha256"]},
         "candidate_sha256": receipt["candidate_sha256"],
         "workflow_verifier_sha256": verifier_hash, "links": links,
-    }
+    }, inputs_current
 
 
 def _audited_documents(verifier, root, contract_path, observations_path):
+    capture = getattr(verifier, "capture_workflow_audit", None)
+    if callable(capture):
+        return capture(root, contract_path, observations_path)
     snapshot = getattr(verifier, "audit_workflow_snapshot", None)
     if callable(snapshot):
-        return snapshot(root, contract_path, observations_path)
+        return (*snapshot(root, contract_path, observations_path), None)
     receipt = verifier.audit_workflows(root, contract_path, observations_path)
     contract, contract_hash = verifier._load_input(
         root, contract_path, "factory.workflow-audit.contract.v1", CONTRACT_FIELDS,
@@ -185,18 +188,22 @@ def _audited_documents(verifier, root, contract_path, observations_path):
     if (contract_hash != receipt["contract_sha256"]
             or observations_hash != receipt["observations_sha256"]):
         raise SystemExit("E_ACCEPTANCE_WORKFLOW: workflow evidence changed")
-    return receipt, contract, observations
+    return receipt, contract, observations, None
 
 
-def _final_inputs(root, evidence):
+def _final_inputs(root, evidence, inputs_current):
     verifier = _verifier()
     try:
-        final = verifier.audit_workflows(root, evidence["contract"]["path"], evidence["observations"]["path"])
+        if inputs_current is None:
+            final = verifier.audit_workflows(root, evidence["contract"]["path"], evidence["observations"]["path"])
+            current = (final["state"] == "PASS" and final["contract_sha256"] == evidence["contract"]["sha256"]
+                       and final["observations_sha256"] == evidence["observations"]["sha256"]
+                       and final["candidate_sha256"] == evidence["candidate_sha256"])
+        else:
+            current = inputs_current()
     except (ValueError, OSError, TypeError, KeyError) as exc:
         raise SystemExit("E_ACCEPTANCE_DRIFT: evidence changed during export") from exc
-    if (final["state"] != "PASS" or final["contract_sha256"] != evidence["contract"]["sha256"]
-            or final["observations_sha256"] != evidence["observations"]["sha256"]
-            or final["candidate_sha256"] != evidence["candidate_sha256"]):
+    if not current:
         raise SystemExit("E_ACCEPTANCE_DRIFT: evidence changed during export")
     if hashlib.sha256(Path(verifier.__file__).read_bytes()).hexdigest() != evidence["workflow_verifier_sha256"]:
         raise SystemExit("E_ACCEPTANCE_DRIFT: workflow verifier changed during export")
@@ -212,13 +219,13 @@ def acceptance_envelope(root: Path, feature: str, contract_path: str, observatio
     identity, approval, plan = _approved_plan_snapshot(root, feature)
     obligations = _approved_catalogue(root, feature, approval)
     records, sources = _task_records(root, feature, identity, plan)
-    evidence = _workflow(root, feature, contract_path, observations_path, obligations, sources, records)
+    evidence, inputs_current = _workflow(root, feature, contract_path, observations_path, obligations, sources, records)
     # Recheck governing inputs and execution/source identity after evidence reads.
     final_identity, final_approval, final_plan = _approved_plan_snapshot(root, feature)
     if (final_identity != identity or final_approval["seal"] != approval["seal"]
             or _task_records(root, feature, final_identity, final_plan) != (records, sources)):
         raise SystemExit("E_ACCEPTANCE_DRIFT: approved inputs changed during export")
-    _final_inputs(root, evidence)
+    _final_inputs(root, evidence, inputs_current)
     if hashlib.sha256(Path(__file__).read_bytes()).hexdigest() != verifier_hash:
         raise SystemExit("E_ACCEPTANCE_DRIFT: acceptance verifier changed during export")
     if (code_identity["specline"] != _code_identity(Path(__file__).parent)
