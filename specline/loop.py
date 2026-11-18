@@ -18,32 +18,40 @@ def _append_progress(root: Path, line: str):
     ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M")
     atomic_text(p, p.read_text() + f"\n- [{ts}] {line}")
 
-def _candidate(root: Path, task: dict) -> dict:
+def _candidate(root: Path, task: dict, *, digests: dict | None = None) -> dict:
     root = root.resolve()
     files = {}
     for name in task["files"]:
         path = (root / name).resolve()
         if not path.is_relative_to(root):
             raise SystemExit("E_SLICE_ESCAPE: task source escapes repository")
-        files[name] = None
+        if digests is not None and path in digests:
+            files[name] = digests[path]
+            continue
+        value = None
         if path.is_file():
             with path.open("rb") as source:
-                files[name] = hashlib.file_digest(source, "sha256").hexdigest()
+                value = hashlib.file_digest(source, "sha256").hexdigest()
+        if digests is not None:
+            digests[path] = value
+        files[name] = value
     return files
 
 
-def _completion(root: Path, feature: str, task: dict, *, refresh: bool = False) -> dict | None:
+def _completion(root: Path, feature: str, task: dict, *, refresh: bool = False,
+                identity: dict | None = None, digests: dict | None = None) -> dict | None:
     record = read_receipt(receipt_path(root, feature, task["id"]))
     if record is None:
         if task["done"]:
             raise SystemExit("E_COMPLETION_MISSING: checked task has no verification receipt")
         return None
-    identity = plan_identity(root, feature)
+    if identity is None:
+        identity = plan_identity(root, feature)
     if (record.get("schema") != "specline.task-completion.v2"
             or record.get("status") != "PASS"
             or record.get("task") != task["id"]
             or record.get("command") != task["verify"]
-            or record.get("candidate") != _candidate(root, task)
+            or record.get("candidate") != _candidate(root, task, digests=digests)
             or any(record.get(key) != value for key, value in identity.items())):
         if refresh:
             return None

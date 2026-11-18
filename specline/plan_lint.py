@@ -42,8 +42,12 @@ def task_path_errors(root: Path, task: dict) -> list[str]:
 TASK = re.compile(r"^- \[( |x)\] (T\d+) \| slice=(\S+) \| files=([^|]+) \| verify=`([^`]+)` \| (.+)$")
 
 def parse_tasks(path: Path) -> list[dict]:
+    return _parse_tasks(Path(path).read_text())
+
+
+def _parse_tasks(text: str) -> list[dict]:
     tasks = []
-    for line in Path(path).read_text().splitlines():
+    for line in text.splitlines():
         m = TASK.match(line.strip())
         if m:
             files = [f.strip() for f in m.group(4).split(",") if f.strip() and "<=" not in f]
@@ -52,8 +56,11 @@ def parse_tasks(path: Path) -> list[dict]:
     return tasks
 
 def lint_plan(path: Path) -> tuple[list[dict], list[str]]:
-    text = Path(path).read_text()
-    tasks = parse_tasks(path)
+    return _lint_plan(path, Path(path).read_text())
+
+
+def _lint_plan(path: Path, text: str) -> tuple[list[dict], list[str]]:
+    tasks = _parse_tasks(text)
     errors = []
     if not tasks:
         errors.append("E_NO_TASKS: no parseable task lines (format: - [ ] T1 | slice=x | files=a,b | verify=`cmd` | text)")

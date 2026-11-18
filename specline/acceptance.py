@@ -12,9 +12,9 @@ import re
 import sys
 from pathlib import Path
 
-from .gates import atomic_text, plan_identity, require_plan_approval
-from .loop import _candidate, _completion
-from .plan_lint import contained_path, lint_plan
+from .gates import _approved_plan_snapshot, atomic_text, require_plan_approval
+from .loop import _completion
+from .plan_lint import _lint_plan, contained_path
 from .strict_lint import _requirement_lines
 
 SCHEMA = "factory.acceptance-evidence.v1"
@@ -45,7 +45,10 @@ def _code_identity(package: Path) -> dict:
 
 
 def catalogue(root: Path, feature: str) -> list[dict]:
-    approval = require_plan_approval(root, feature)
+    return _approved_catalogue(root, feature, require_plan_approval(root, feature))
+
+
+def _approved_catalogue(root: Path, feature: str, approval: dict) -> list[dict]:
     path = contained_path(root, f"specs/{feature}.md")
     snapshot = path.read_bytes()
     snapshot_hash = hashlib.sha256(snapshot).hexdigest()
@@ -87,17 +90,19 @@ def _verifier():
     return workflow_audit
 
 
-def _task_records(root: Path, feature: str) -> tuple[dict, dict]:
-    tasks, errors = lint_plan(root / "plans" / f"{feature}.md")
+def _task_records(root: Path, feature: str, identity: dict, plan: str) -> tuple[dict, dict]:
+    path = root / "plans" / f"{feature}.md"
+    tasks, errors = _lint_plan(path, plan)
     if errors:
         raise SystemExit("E_ACCEPTANCE_PLAN: " + "; ".join(errors))
     records, sources = {}, {}
+    digests: dict[Path, str | None] = {}
     for task in tasks:
-        record = _completion(root, feature, task)
+        record = _completion(root, feature, task, identity=identity, digests=digests)
         if record is None or record.get("returncode") != 0:
             raise SystemExit(f"E_ACCEPTANCE_TASK: verify task {task['id']} before exporting")
         records[task["id"]] = record["seal"]
-        for name, value in _candidate(root, task).items():
+        for name, value in record["candidate"].items():
             if value is None:
                 raise SystemExit("E_ACCEPTANCE_SOURCE: declared task file is missing")
             sources[contained_path(root, name).relative_to(root).as_posix()] = value
@@ -132,17 +137,12 @@ def _workflow(root, feature, contract_path, observations_path, obligations, sour
     verifier = _verifier()
     verifier_hash = hashlib.sha256(Path(verifier.__file__).read_bytes()).hexdigest()
     try:
-        receipt = verifier.audit_workflows(root, contract_path, observations_path)
-        contract, current_hash = verifier._load_input(
-            root, contract_path, "factory.workflow-audit.contract.v1", CONTRACT_FIELDS,
-        )
-        observations, observed_hash = verifier._load_input(
-            root, observations_path, "factory.workflow-audit.observations.v1", OBSERVATION_FIELDS,
+        receipt, contract, observations = _audited_documents(
+            verifier, root, contract_path, observations_path
         )
     except (ValueError, OSError, TypeError, KeyError) as exc:
         raise SystemExit("E_ACCEPTANCE_WORKFLOW: invalid or unavailable workflow evidence") from exc
-    if (receipt["state"] != "PASS" or current_hash != receipt["contract_sha256"]
-            or observed_hash != receipt["observations_sha256"]):
+    if receipt["state"] != "PASS":
         raise SystemExit("E_ACCEPTANCE_WORKFLOW: workflow evidence is incomplete or changed")
     links = _links(root, feature, contract, observations, obligations, records)
     required = dict(sources)
@@ -158,6 +158,23 @@ def _workflow(root, feature, contract_path, observations_path, obligations, sour
         "candidate_sha256": receipt["candidate_sha256"],
         "workflow_verifier_sha256": verifier_hash, "links": links,
     }
+
+
+def _audited_documents(verifier, root, contract_path, observations_path):
+    snapshot = getattr(verifier, "audit_workflow_snapshot", None)
+    if callable(snapshot):
+        return snapshot(root, contract_path, observations_path)
+    receipt = verifier.audit_workflows(root, contract_path, observations_path)
+    contract, contract_hash = verifier._load_input(
+        root, contract_path, "factory.workflow-audit.contract.v1", CONTRACT_FIELDS,
+    )
+    observations, observations_hash = verifier._load_input(
+        root, observations_path, "factory.workflow-audit.observations.v1", OBSERVATION_FIELDS,
+    )
+    if (contract_hash != receipt["contract_sha256"]
+            or observations_hash != receipt["observations_sha256"]):
+        raise SystemExit("E_ACCEPTANCE_WORKFLOW: workflow evidence changed")
+    return receipt, contract, observations
 
 
 def _final_inputs(root, evidence):
@@ -181,15 +198,14 @@ def acceptance_envelope(root: Path, feature: str, contract_path: str, observatio
                      "factoryline": _code_identity(cf_package),
                      "python": [sys.implementation.name, sys.version.split()[0]]}
     root = Path(root).resolve()
-    approval = require_plan_approval(root, feature)
-    identity = plan_identity(root, feature)
-    obligations = catalogue(root, feature)
-    records, sources = _task_records(root, feature)
+    identity, approval, plan = _approved_plan_snapshot(root, feature)
+    obligations = _approved_catalogue(root, feature, approval)
+    records, sources = _task_records(root, feature, identity, plan)
     evidence = _workflow(root, feature, contract_path, observations_path, obligations, sources, records)
     # Recheck governing inputs and execution/source identity after evidence reads.
-    if (plan_identity(root, feature) != identity
-            or require_plan_approval(root, feature)["seal"] != approval["seal"]
-            or _task_records(root, feature) != (records, sources)):
+    final_identity, final_approval, final_plan = _approved_plan_snapshot(root, feature)
+    if (final_identity != identity or final_approval["seal"] != approval["seal"]
+            or _task_records(root, feature, final_identity, final_plan) != (records, sources)):
         raise SystemExit("E_ACCEPTANCE_DRIFT: approved inputs changed during export")
     _final_inputs(root, evidence)
     if hashlib.sha256(Path(__file__).read_bytes()).hexdigest() != verifier_hash:
