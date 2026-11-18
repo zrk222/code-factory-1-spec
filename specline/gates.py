@@ -50,28 +50,42 @@ def read_receipt(path: Path) -> dict | None:
         raise SystemExit("E_RECEIPT_INVALID: corrupt local receipt") from exc
 
 
+def _plan_sha256(plan: str) -> str:
+    # Completion checkboxes are a projection, not a change in task authority.
+    normalized = re.sub(r"(?m)^- \[[ x]\] (T\d+ \|)", r"- [ ] \1", plan)
+    return hashlib.sha256(normalized.encode()).hexdigest()
+
+
 def plan_identity(root: Path, feature: str) -> dict:
+    return _plan_snapshot(root, feature)[0]
+
+
+def _plan_snapshot(root: Path, feature: str) -> tuple[dict, str]:
     receipt_path(root, feature)
     root = Path(root).resolve()
     spec = root / "specs" / f"{feature}.md"
     plan = (root / "plans" / f"{feature}.md").read_text()
-    # Completion checkboxes are a projection, not a change in task authority.
-    plan = re.sub(r"(?m)^- \[[ x]\] (T\d+ \|)", r"- [ ] \1", plan)
-    return {"repository": str(root), "feature": feature,
+    identity = {"repository": str(root), "feature": feature,
             "spec_sha256": hashlib.sha256(spec.read_bytes()).hexdigest(),
-            "plan_sha256": hashlib.sha256(plan.encode()).hexdigest()}
+            "plan_sha256": _plan_sha256(plan)}
+    return identity, plan
 
 
 def require_plan_approval(root: Path, feature: str) -> dict:
+    return _approved_plan_snapshot(root, feature)[1]
+
+
+def _approved_plan_snapshot(root: Path, feature: str) -> tuple[dict, dict, str]:
+    """Return the approval, identity and exact text of one approved plan."""
     approval = read_receipt(receipt_path(root, feature))
     if approval is None:
         raise SystemExit("plan gate missing: re-gate the plan to create a bound approval receipt")
-    identity = plan_identity(root, feature)
+    identity, plan = _plan_snapshot(root, feature)
     if approval.get("schema") != "specline.plan-approval.v2" or any(
         approval.get(key) != value for key, value in identity.items()
     ):
         raise SystemExit("E_INTENT_DRIFT: spec, plan or repository changed. Re-gate the plan.")
-    return approval
+    return identity, approval, plan
 
 def _seal(root: Path, line: str):
     p = Path(root)/"context"/"PROGRESS.md"

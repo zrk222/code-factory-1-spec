@@ -2,6 +2,35 @@ import json, re
 from pathlib import Path
 import pytest
 
+
+def test_verifier_manifest_matches_glob_identity_and_rechecks_contents(tmp_path):
+    from hashlib import sha256
+    from specline.acceptance import _code_identity
+
+    package = tmp_path / "verifier"
+    for name in (".hidden.py", "load-extra.py", "load/inner.py", "upper.PY", "data.txt"):
+        path = package / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(name.encode() * 24_000)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "unrelated.py").write_bytes(b"do not enumerate linked directories")
+    try:
+        (package / "linked-package").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pass  # Windows may require permission to create directory links.
+
+    expected = {
+        path.relative_to(package).as_posix(): sha256(path.read_bytes()).hexdigest()
+        for path in sorted(package.rglob("*.py"))
+    }
+    assert list(_code_identity(package).items()) == list(expected.items())
+
+    (package / "load/inner.py").write_bytes(b"changed verifier")
+    expected["load/inner.py"] = sha256(b"changed verifier").hexdigest()
+    assert _code_identity(package) == expected
+
+
 def test_init_creates_six_file_context(tmp_path):
     from specline.scaffold import init_project
     created = init_project(tmp_path)

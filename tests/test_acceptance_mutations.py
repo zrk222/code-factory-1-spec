@@ -29,14 +29,16 @@ def test_catalogue_requires_both_requirements_and_scenarios(project, monkeypatch
 def test_observations_changed_after_audit_are_rejected(evidence_project, monkeypatch):
     root, contract, observations = evidence_project
     from factoryline import workflow_audit
-    original = workflow_audit.audit_workflows
+    methods = ("capture_workflow_audit", "audit_workflow_snapshot", "audit_workflows")
+    method = next(name for name in methods if hasattr(workflow_audit, name))
+    original = getattr(workflow_audit, method)
 
     def change_after_audit(*args):
         result = original(*args)
         (root / observations).write_text("{}")
         return result
 
-    monkeypatch.setattr(workflow_audit, "audit_workflows", change_after_audit)
+    monkeypatch.setattr(workflow_audit, method, change_after_audit)
     with pytest.raises(SystemExit, match="E_ACCEPTANCE_WORKFLOW|E_ACCEPTANCE_DRIFT"):
         acceptance_envelope(root, "refunds", contract, observations)
 

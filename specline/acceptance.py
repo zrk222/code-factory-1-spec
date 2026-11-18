@@ -7,14 +7,16 @@ from __future__ import annotations
 
 import hashlib
 import io
+from itertools import chain
 import json
+import os
 import re
 import sys
 from pathlib import Path
 
-from .gates import atomic_text, plan_identity, require_plan_approval
-from .loop import _candidate, _completion
-from .plan_lint import contained_path, lint_plan
+from .gates import _approved_plan_snapshot, atomic_text, require_plan_approval
+from .loop import _completion
+from .plan_lint import _lint_plan, contained_path
 from .strict_lint import _requirement_lines
 
 SCHEMA = "factory.acceptance-evidence.v1"
@@ -28,24 +30,36 @@ def digest(value) -> str:
 
 
 def _code_identity(package: Path) -> dict:
-    files = sorted(package.rglob("*.py"))
-    if len(files) > 1024:
-        raise SystemExit("E_ACCEPTANCE_BUDGET: verifier package exceeds file bound")
+    """Hash the verifier's Python files without constructing a Path per entry."""
+    root = os.fspath(package)
+    prefix_length = len(os.path.join(root, ""))
+    files = []
+    for directory, subdirectories, filenames in os.walk(root, followlinks=False):
+        for name in chain(subdirectories, filenames):
+            if os.path.normcase(name).endswith(".py"):
+                files.append(os.path.join(directory[prefix_length:], name))
+                if len(files) > 1024:
+                    raise SystemExit("E_ACCEPTANCE_BUDGET: verifier package exceeds file bound")
+    files.sort(key=lambda path: os.path.normcase(path).split(os.sep))
     manifest, total = {}, 0
-    for path in files:
+    buffer = memoryview(bytearray(128 * 1024))
+    for relative in files:
         checksum = hashlib.sha256()
-        with path.open("rb") as stream:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                total += len(chunk)
+        with open(os.path.join(root, relative), "rb") as stream:
+            while size := stream.readinto(buffer):
+                total += size
                 if total > 64 * 1024 * 1024:
                     raise SystemExit("E_ACCEPTANCE_BUDGET: verifier package exceeds byte bound")
-                checksum.update(chunk)
-        manifest[path.relative_to(package).as_posix()] = checksum.hexdigest()
+                checksum.update(buffer[:size])
+        manifest[relative.replace(os.sep, "/")] = checksum.hexdigest()
     return manifest
 
 
 def catalogue(root: Path, feature: str) -> list[dict]:
-    approval = require_plan_approval(root, feature)
+    return _approved_catalogue(root, feature, require_plan_approval(root, feature))
+
+
+def _approved_catalogue(root: Path, feature: str, approval: dict) -> list[dict]:
     path = contained_path(root, f"specs/{feature}.md")
     snapshot = path.read_bytes()
     snapshot_hash = hashlib.sha256(snapshot).hexdigest()
@@ -87,17 +101,19 @@ def _verifier():
     return workflow_audit
 
 
-def _task_records(root: Path, feature: str) -> tuple[dict, dict]:
-    tasks, errors = lint_plan(root / "plans" / f"{feature}.md")
+def _task_records(root: Path, feature: str, identity: dict, plan: str) -> tuple[dict, dict]:
+    path = root / "plans" / f"{feature}.md"
+    tasks, errors = _lint_plan(path, plan)
     if errors:
         raise SystemExit("E_ACCEPTANCE_PLAN: " + "; ".join(errors))
     records, sources = {}, {}
+    digests: dict[Path, str | None] = {}
     for task in tasks:
-        record = _completion(root, feature, task)
+        record = _completion(root, feature, task, identity=identity, digests=digests)
         if record is None or record.get("returncode") != 0:
             raise SystemExit(f"E_ACCEPTANCE_TASK: verify task {task['id']} before exporting")
         records[task["id"]] = record["seal"]
-        for name, value in _candidate(root, task).items():
+        for name, value in record["candidate"].items():
             if value is None:
                 raise SystemExit("E_ACCEPTANCE_SOURCE: declared task file is missing")
             sources[contained_path(root, name).relative_to(root).as_posix()] = value
@@ -132,17 +148,12 @@ def _workflow(root, feature, contract_path, observations_path, obligations, sour
     verifier = _verifier()
     verifier_hash = hashlib.sha256(Path(verifier.__file__).read_bytes()).hexdigest()
     try:
-        receipt = verifier.audit_workflows(root, contract_path, observations_path)
-        contract, current_hash = verifier._load_input(
-            root, contract_path, "factory.workflow-audit.contract.v1", CONTRACT_FIELDS,
-        )
-        observations, observed_hash = verifier._load_input(
-            root, observations_path, "factory.workflow-audit.observations.v1", OBSERVATION_FIELDS,
+        receipt, contract, observations, inputs_current = _audited_documents(
+            verifier, root, contract_path, observations_path
         )
     except (ValueError, OSError, TypeError, KeyError) as exc:
         raise SystemExit("E_ACCEPTANCE_WORKFLOW: invalid or unavailable workflow evidence") from exc
-    if (receipt["state"] != "PASS" or current_hash != receipt["contract_sha256"]
-            or observed_hash != receipt["observations_sha256"]):
+    if receipt["state"] != "PASS":
         raise SystemExit("E_ACCEPTANCE_WORKFLOW: workflow evidence is incomplete or changed")
     links = _links(root, feature, contract, observations, obligations, records)
     required = dict(sources)
@@ -157,18 +168,42 @@ def _workflow(root, feature, contract_path, observations_path, obligations, sour
         "observations": {"path": observations_path, "sha256": receipt["observations_sha256"]},
         "candidate_sha256": receipt["candidate_sha256"],
         "workflow_verifier_sha256": verifier_hash, "links": links,
-    }
+    }, inputs_current
 
 
-def _final_inputs(root, evidence):
+def _audited_documents(verifier, root, contract_path, observations_path):
+    capture = getattr(verifier, "capture_workflow_audit", None)
+    if callable(capture):
+        return capture(root, contract_path, observations_path)
+    snapshot = getattr(verifier, "audit_workflow_snapshot", None)
+    if callable(snapshot):
+        return (*snapshot(root, contract_path, observations_path), None)
+    receipt = verifier.audit_workflows(root, contract_path, observations_path)
+    contract, contract_hash = verifier._load_input(
+        root, contract_path, "factory.workflow-audit.contract.v1", CONTRACT_FIELDS,
+    )
+    observations, observations_hash = verifier._load_input(
+        root, observations_path, "factory.workflow-audit.observations.v1", OBSERVATION_FIELDS,
+    )
+    if (contract_hash != receipt["contract_sha256"]
+            or observations_hash != receipt["observations_sha256"]):
+        raise SystemExit("E_ACCEPTANCE_WORKFLOW: workflow evidence changed")
+    return receipt, contract, observations, None
+
+
+def _final_inputs(root, evidence, inputs_current):
     verifier = _verifier()
     try:
-        final = verifier.audit_workflows(root, evidence["contract"]["path"], evidence["observations"]["path"])
+        if inputs_current is None:
+            final = verifier.audit_workflows(root, evidence["contract"]["path"], evidence["observations"]["path"])
+            current = (final["state"] == "PASS" and final["contract_sha256"] == evidence["contract"]["sha256"]
+                       and final["observations_sha256"] == evidence["observations"]["sha256"]
+                       and final["candidate_sha256"] == evidence["candidate_sha256"])
+        else:
+            current = inputs_current()
     except (ValueError, OSError, TypeError, KeyError) as exc:
         raise SystemExit("E_ACCEPTANCE_DRIFT: evidence changed during export") from exc
-    if (final["state"] != "PASS" or final["contract_sha256"] != evidence["contract"]["sha256"]
-            or final["observations_sha256"] != evidence["observations"]["sha256"]
-            or final["candidate_sha256"] != evidence["candidate_sha256"]):
+    if not current:
         raise SystemExit("E_ACCEPTANCE_DRIFT: evidence changed during export")
     if hashlib.sha256(Path(verifier.__file__).read_bytes()).hexdigest() != evidence["workflow_verifier_sha256"]:
         raise SystemExit("E_ACCEPTANCE_DRIFT: workflow verifier changed during export")
@@ -181,17 +216,16 @@ def acceptance_envelope(root: Path, feature: str, contract_path: str, observatio
                      "factoryline": _code_identity(cf_package),
                      "python": [sys.implementation.name, sys.version.split()[0]]}
     root = Path(root).resolve()
-    approval = require_plan_approval(root, feature)
-    identity = plan_identity(root, feature)
-    obligations = catalogue(root, feature)
-    records, sources = _task_records(root, feature)
-    evidence = _workflow(root, feature, contract_path, observations_path, obligations, sources, records)
+    identity, approval, plan = _approved_plan_snapshot(root, feature)
+    obligations = _approved_catalogue(root, feature, approval)
+    records, sources = _task_records(root, feature, identity, plan)
+    evidence, inputs_current = _workflow(root, feature, contract_path, observations_path, obligations, sources, records)
     # Recheck governing inputs and execution/source identity after evidence reads.
-    if (plan_identity(root, feature) != identity
-            or require_plan_approval(root, feature)["seal"] != approval["seal"]
-            or _task_records(root, feature) != (records, sources)):
+    final_identity, final_approval, final_plan = _approved_plan_snapshot(root, feature)
+    if (final_identity != identity or final_approval["seal"] != approval["seal"]
+            or _task_records(root, feature, final_identity, final_plan) != (records, sources)):
         raise SystemExit("E_ACCEPTANCE_DRIFT: approved inputs changed during export")
-    _final_inputs(root, evidence)
+    _final_inputs(root, evidence, inputs_current)
     if hashlib.sha256(Path(__file__).read_bytes()).hexdigest() != verifier_hash:
         raise SystemExit("E_ACCEPTANCE_DRIFT: acceptance verifier changed during export")
     if (code_identity["specline"] != _code_identity(Path(__file__).parent)
