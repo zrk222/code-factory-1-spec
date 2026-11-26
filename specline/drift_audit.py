@@ -7,6 +7,7 @@ the coder invented parameters, referenced undefined entities, or widened scope.
 Deterministic: it parses, it does not judge intent.
 """
 from __future__ import annotations
+from .paths import read_text
 import re
 import ast
 from collections import Counter
@@ -60,7 +61,7 @@ class AuditReport:
             spans = []
             if path.exists() and path.suffix == ".py":
                 try:
-                    tree = ast.parse(path.read_text())
+                    tree = ast.parse(read_text(path))
                     spans = [
                         (node.name, node.lineno, getattr(node, "end_lineno", node.lineno))
                         for node in ast.walk(tree)
@@ -720,7 +721,7 @@ def audit_code_against_spec(
     spec_path, changed_files, slice_prefix=None, packet_files=None, *, baseline_files=None
 ):
     rep = AuditReport()
-    spec_text = Path(spec_path).read_text()
+    spec_text = read_text(spec_path)
     ok_numbers = _spec_authorized_numbers(spec_text)
     authorized = {str(f) for f in (packet_files or [])}
 

@@ -2,6 +2,7 @@
 and seals it with a receipt in PROGRESS.md. Drift guard: if the spec hash
 changed since plan approval, the loop refuses until the plan is re-gated."""
 from __future__ import annotations
+from .paths import read_text, read_text_with_encoding
 import hashlib, subprocess, datetime
 from pathlib import Path
 from .plan_lint import lint_plan
@@ -16,7 +17,8 @@ def _progress(root: Path) -> Path:
 def _append_progress(root: Path, line: str):
     p = _progress(root)
     ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M")
-    atomic_text(p, p.read_text() + f"\n- [{ts}] {line}")
+    text, encoding = read_text_with_encoding(p)
+    atomic_text(p, text + f"\n- [{ts}] {line}", encoding=encoding)
 
 def _candidate(root: Path, task: dict, *, digests: dict | None = None) -> dict:
     root = root.resolve()
@@ -60,16 +62,16 @@ def _completion(root: Path, feature: str, task: dict, *, refresh: bool = False,
 
 
 def _project_done(plan: Path, task_id: str):
-    original = plan.read_text()
+    original, encoding = read_text_with_encoding(plan)
     text = original.replace(f"- [ ] {task_id} |", f"- [x] {task_id} |", 1)
     if text != original:
-        atomic_text(plan, text)
+        atomic_text(plan, text, encoding=encoding)
 
 
 def _project_completion(root: Path, feature: str, task_id: str, record: dict):
     _project_done(root / "plans" / f"{feature}.md", task_id)
     event = f"DONE {feature} {task_id} verify_pass=true receipt_seal={record['seal']}"
-    if not any(line.partition("] ")[2] == event for line in _progress(root).read_text().splitlines()):
+    if not any(line.partition("] ")[2] == event for line in read_text(_progress(root)).splitlines()):
         _append_progress(root, event)
 
 def next_task(root: Path, feature: str) -> dict:

@@ -1,6 +1,7 @@
 """specline validate — EARS/Gherkin/leak lint. A spec that fails here never
 reaches an agent, so ambiguity dies before it costs tokens."""
 from __future__ import annotations
+from .paths import read_text
 import re
 from pathlib import Path
 
@@ -9,7 +10,7 @@ REQ_LINE = re.compile(r"^\s*-\s+\S", re.M)
 
 
 def validate_spec(path: Path) -> list[str]:
-    text = Path(path).read_text()
+    text = read_text(path)
     errors = []
     if "## MUST" not in text:
         errors.append("E_NO_MUST: missing '## MUST — Functional core' section")
@@ -37,7 +38,7 @@ def validate_spec(path: Path) -> list[str]:
 
 def decision_rows(path: Path) -> list[dict]:
     """Parse the 'Decision logic (factory candidates)' table -> rules."""
-    text = Path(path).read_text()
+    text = read_text(path)
     if "## Decision logic" not in text:
         return []
     section = text.split("## Decision logic")[1]

@@ -3,6 +3,7 @@ init -> new -> (write spec) -> validate -> gate spec -> (write plan) ->
 tasks -> gate plan -> loop next/done ... -> gate code -> handoff -> status
 """
 from __future__ import annotations
+from .paths import read_text
 import argparse, json, sys
 from pathlib import Path
 
@@ -118,7 +119,8 @@ def _main(argv=None):
     s.add_argument("--root", default=".")
 
     s = sub.add_parser("optimize-prd", help="score a PRD before implementation")
-    s.add_argument("path", help="PRD/spec markdown path")
+    s.add_argument("path", help="feature name (reads specs/<feature>.md) or a PRD/spec markdown path")
+    s.add_argument("--root", default=".")
     s.add_argument("--json", action="store_true")
 
     s = sub.add_parser("version", help="show package provenance")
@@ -150,7 +152,7 @@ def _main(argv=None):
         rep = strict_validate(spec_path)
         if a.json:
             print(json.dumps({"passed": rep.ok,
-                              "attribution": rep.attribution(spec_path.read_text()).to_dict()},
+                              "attribution": rep.attribution(read_text(spec_path)).to_dict()},
                              indent=2))
         for f in (rep.findings if a.warn else rep.blocks):
             print(str(f))
@@ -257,10 +259,18 @@ def _main(argv=None):
                   f"{s['naive_tokens']:,}; modeled difference: {s['saved_pct']}%")
     elif a.cmd == "optimize-prd":
         from .prd_optimizer import optimize_prd, render_prd_score
-        rep = optimize_prd(Path(a.path))
+        rep = optimize_prd(_prd_path(root, a.path))
         print(json.dumps(rep.to_dict(), indent=2) if a.json else render_prd_score(rep))
         if not rep.passed:
             raise SystemExit(1)
+
+def _prd_path(root: Path, value: str) -> Path:
+    """`optimize-prd refunds` reads specs/refunds.md like every other command; a path still works."""
+    candidate = Path(value)
+    if candidate.suffix == ".md" or candidate.is_absolute() or len(candidate.parts) > 1:
+        return candidate if candidate.is_absolute() else root / candidate
+    return root / "specs" / f"{value}.md"
+
 
 if __name__ == "__main__":
     main()

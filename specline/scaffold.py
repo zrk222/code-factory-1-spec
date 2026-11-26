@@ -2,7 +2,7 @@
 from __future__ import annotations
 import shutil
 from pathlib import Path
-from .paths import templates_dir, project_dirs
+from .paths import templates_dir, project_dirs, read_text
 
 def init_project(root: Path) -> list[Path]:
     root = Path(root); created = []
@@ -35,6 +35,6 @@ def new_feature(root: Path, name: str) -> tuple[Path, Path]:
         raise FileExistsError(spec)
     spec.parent.mkdir(parents=True, exist_ok=True); plan.parent.mkdir(parents=True, exist_ok=True)
     t = templates_dir()
-    spec.write_text((t/"SPEC_TEMPLATE.md").read_text().replace("{name}", name))
-    plan.write_text((t/"PLAN_TEMPLATE.md").read_text().replace("{name}", name))
+    spec.write_text(read_text(t/"SPEC_TEMPLATE.md").replace("{name}", name), encoding="utf-8")
+    plan.write_text(read_text(t/"PLAN_TEMPLATE.md").replace("{name}", name), encoding="utf-8")
     return spec, plan

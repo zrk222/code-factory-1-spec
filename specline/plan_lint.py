@@ -1,6 +1,7 @@
 """specline tasks — atomicity linter. Enforces the double-decomposition
 contract so every task is a clean Ralph-Wiggum session."""
 from __future__ import annotations
+from .paths import read_text
 import re
 from pathlib import Path, PureWindowsPath
 
@@ -42,7 +43,7 @@ def task_path_errors(root: Path, task: dict) -> list[str]:
 TASK = re.compile(r"^- \[( |x)\] (T\d+) \| slice=(\S+) \| files=([^|]+) \| verify=`([^`]+)` \| (.+)$")
 
 def parse_tasks(path: Path) -> list[dict]:
-    return _parse_tasks(Path(path).read_text())
+    return _parse_tasks(read_text(path))
 
 
 def _parse_tasks(text: str) -> list[dict]:
@@ -56,7 +57,7 @@ def _parse_tasks(text: str) -> list[dict]:
     return tasks
 
 def lint_plan(path: Path) -> tuple[list[dict], list[str]]:
-    return _lint_plan(path, Path(path).read_text())
+    return _lint_plan(path, read_text(path))
 
 
 def _lint_plan(path: Path, text: str) -> tuple[list[dict], list[str]]:

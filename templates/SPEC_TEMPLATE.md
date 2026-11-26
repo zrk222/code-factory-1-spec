@@ -31,6 +31,15 @@ Scenario:
 ## SHOULD NOT — Implementation details
 <!-- Leave the "how" to the plan/tasks unless it is a systemic invariant -->
 
+## Non-goals
+<!-- What this feature will not do, so agents know what not to build -->
+- 
+
+## Risks and rollback
+<!-- What could go wrong, and how to undo it. Keep requirement literals out of this section. -->
+- Risk: 
+- Rollback: 
+
 ## Decision logic (factory candidates)
 <!-- Ordered business rules over extracted facts. specline handoff compiles
      these via HSF instead of letting agents improvise them. -->
