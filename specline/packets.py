@@ -3,6 +3,7 @@ made executable: each packet contains ONLY the task, the spec excerpt that
 governs it, the exact file list, a constitution digest, and the verify
 command — under a hard token budget. One packet == one agent session."""
 from __future__ import annotations
+from .paths import read_text
 import hashlib, re
 from pathlib import Path
 from .plan_lint import contained_path, task_path_errors
@@ -41,7 +42,7 @@ def build_packet(root: Path, feature: str, task: dict) -> tuple[Path, dict]:
             raise ValueError("packet output redirects through a link")
     except (ValueError, OSError, RuntimeError) as exc:
         raise SystemExit("E_PACKET_PATH: unsafe specification or packet path") from exc
-    spec_text = spec.read_text()
+    spec_text = read_text(spec)
     excerpt = _relevant_spec_excerpt(spec_text, task["text"])
     files_block = "\n".join(f"- {f}" for f in task["files"]) or "- (new files in slice)"
     body = f"""# TASK PACKET {task['id']} — {feature}
@@ -71,7 +72,7 @@ Run: `{task['verify']}` — must pass. Then STOP and report the diff summary.
             "split the feature/spec and re-approve its plan; no requirements were truncated"
         )
     out.parent.mkdir(exist_ok=True)
-    out.write_text(body)
+    out.write_text(body, encoding="utf-8")
     meta = {"packet": str(out), "tokens_est": est,
             "sha": hashlib.sha256(body.encode()).hexdigest()[:16]}
     return out, meta

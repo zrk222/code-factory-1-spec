@@ -1,4 +1,4 @@
-﻿name: ci
+name: ci
 on: [push, pull_request]
 jobs:
   test:
@@ -12,23 +12,8 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: pip install -e ".[dev]"
+      - name: install HSF so the handoff round-trip test runs instead of skipping
+        run: pip install "code-factory-3-compile @ git+https://github.com/zrk222/code-factory-3-compile@main"
       - run: pytest -q
-      - name: end-to-end walkthrough (init -> gates -> loop -> handoff -> status)
-        run: |
-          mkdir wt && cd wt
-          specline init
-          specline new refunds
-          python -c "
-          import sys; sys.path.insert(0,'../tests')
-          from conftest import GOOD_SPEC, GOOD_PLAN
-          open('specs/refunds.md','w').write(GOOD_SPEC)
-          open('plans/refunds.md','w').write(GOOD_PLAN)"
-          specline validate refunds
-          specline gate spec refunds
-          specline tasks refunds
-          specline gate plan refunds
-          specline loop next refunds
-          specline loop done refunds T1
-          specline handoff refunds
-          specline agent claude
-          specline status
+      - name: end-to-end walkthrough (every README quickstart step on the example)
+        run: bash examples/refund-portal/walkthrough.sh wt

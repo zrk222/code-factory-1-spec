@@ -2,6 +2,7 @@
 any agent harness. The constitution IS the agent config; packets are the
 session protocol; slash commands make the loop one keystroke."""
 from __future__ import annotations
+from .paths import read_text
 from pathlib import Path
 
 CLAUDE_NEXT_CMD = """Read context/PROGRESS.md, then run `specline loop next <feature>`.
@@ -12,20 +13,20 @@ Complete the packet's single task, run its verify command, then run
 
 def wire_agent(root: Path, agent: str) -> list[Path]:
     root = Path(root); created = []
-    constitution = (root/"AGENTS.md").read_text()
+    constitution = read_text(root/"AGENTS.md")
     if agent in {"claude", "claude-code"}:
         dst = root/"CLAUDE.md"
-        dst.write_text(constitution + "\n\n## SpecLine protocol\n" + CLAUDE_NEXT_CMD)
+        dst.write_text(constitution + "\n\n## SpecLine protocol\n" + CLAUDE_NEXT_CMD, encoding="utf-8")
         created.append(dst)
         cmd_dir = root/".claude"/"commands"; cmd_dir.mkdir(parents=True, exist_ok=True)
-        c = cmd_dir/"next-task.md"; c.write_text(CLAUDE_NEXT_CMD); created.append(c)
+        c = cmd_dir/"next-task.md"; c.write_text(CLAUDE_NEXT_CMD, encoding="utf-8"); created.append(c)
     elif agent == "codex":
         # Codex reads AGENTS.md natively; append the protocol if absent
         if "SpecLine protocol" not in constitution:
-            (root/"AGENTS.md").write_text(constitution + "\n\n## SpecLine protocol\n" + CLAUDE_NEXT_CMD)
+            (root/"AGENTS.md").write_text(constitution + "\n\n## SpecLine protocol\n" + CLAUDE_NEXT_CMD, encoding="utf-8")
         created.append(root/"AGENTS.md")
     else:
         dst = root/f"{agent.upper()}_AGENT.md"
-        dst.write_text(constitution + "\n\n## SpecLine protocol\n" + CLAUDE_NEXT_CMD)
+        dst.write_text(constitution + "\n\n## SpecLine protocol\n" + CLAUDE_NEXT_CMD, encoding="utf-8")
         created.append(dst)
     return created

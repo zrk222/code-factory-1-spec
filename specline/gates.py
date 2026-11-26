@@ -1,14 +1,15 @@
 """Human review gates with receipts. A gate signoff writes a hash-sealed
 line into PROGRESS.md; the loop and drift guard consume those seals."""
 from __future__ import annotations
+from .paths import progress_text, read_text, read_text_with_encoding
 import hashlib, datetime, json, os, re, tempfile
 from pathlib import Path
 from .spec_lint import validate_spec
-from .plan_lint import lint_plan
+from .plan_lint import lint_plan, parse_tasks
 from .strict_lint import strict_errors
 
 
-def atomic_text(path: Path, text: str, encoding: str | None = None):
+def atomic_text(path: Path, text: str, encoding: str = "utf-8"):
     """Replace one local receipt/projection without exposing a partial write."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".specline-")
@@ -64,7 +65,7 @@ def _plan_snapshot(root: Path, feature: str) -> tuple[dict, str]:
     receipt_path(root, feature)
     root = Path(root).resolve()
     spec = root / "specs" / f"{feature}.md"
-    plan = (root / "plans" / f"{feature}.md").read_text()
+    plan = read_text(root / "plans" / f"{feature}.md")
     identity = {"repository": str(root), "feature": feature,
             "spec_sha256": hashlib.sha256(spec.read_bytes()).hexdigest(),
             "plan_sha256": _plan_sha256(plan)}
@@ -87,12 +88,54 @@ def _approved_plan_snapshot(root: Path, feature: str) -> tuple[dict, dict, str]:
         raise SystemExit("E_INTENT_DRIFT: spec, plan or repository changed. Re-gate the plan.")
     return identity, approval, plan
 
-def _seal(root: Path, line: str):
+NEXT_PHASE = {"spec": "plan", "plan": "build", "code": "ship"}
+
+
+def _seal(root: Path, line: str, phase: str | None = None):
     p = Path(root)/"context"/"PROGRESS.md"
     ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M")
-    atomic_text(p, p.read_text() + f"\n- [{ts}] {line}")
+    text, encoding = progress_text(p)
+    if phase in NEXT_PHASE:
+        text = re.sub(r"(## Current phase\n)[^\n#]*", lambda m: m.group(1) + NEXT_PHASE[phase], text, count=1)
+    atomic_text(p, text + f"\n- [{ts}] {line}", encoding=encoding)
 
-def gate(root: Path, phase: str, feature: str, approver: str = "human", strict: bool = True) -> dict:
+def _code_gate_missing(root: Path, feature: str) -> list[str]:
+    """Signing off code needs an approved plan and a current completion receipt for every task."""
+    from .loop import _completion
+    require_plan_approval(root, feature)
+    tasks = parse_tasks(Path(root) / "plans" / f"{feature}.md")
+    if not tasks:
+        return ["<no tasks in plan>"]
+    return [task["id"] for task in tasks if not _completion(root, feature, task, refresh=True)]
+
+
+def spec_gate_current(root: Path, feature: str) -> bool:
+    """True when PROGRESS.md records a spec or plan gate for the spec bytes on disk now."""
+    spec = Path(root) / "specs" / f"{feature}.md"
+    progress = Path(root) / "context" / "PROGRESS.md"
+    if not spec.exists() or not progress.exists():
+        return False
+    sha = hashlib.sha256(spec.read_bytes()).hexdigest()[:16]
+    pattern = re.compile(rf"GATE (?:spec|plan) {re.escape(feature)} .*\bsha={sha}\b")
+    return any(pattern.search(line) for line in read_text(progress).splitlines())
+
+
+def _reusable_approval(root: Path, feature: str, approver: str, strict: bool) -> dict | None:
+    """The current approval, if it already binds exactly these inputs; re-sealing would only churn the seal."""
+    try:
+        existing = read_receipt(receipt_path(root, feature))
+    except SystemExit:
+        return None
+    if not existing or existing.get("schema") != "specline.plan-approval.v2":
+        return None
+    if existing.get("approver") != approver or existing.get("strict") != strict:
+        return None
+    identity = plan_identity(root, feature)
+    return existing if all(existing.get(key) == value for key, value in identity.items()) else None
+
+
+def gate(root: Path, phase: str, feature: str, approver: str = "human", strict: bool = True,
+         reissue: bool = False) -> dict:
     root = Path(root)
     receipt_path(root, feature)
     spec = root/"specs"/f"{feature}.md"
@@ -103,7 +146,7 @@ def gate(root: Path, phase: str, feature: str, approver: str = "human", strict: 
         if errs:
             raise SystemExit("spec gate FAILED:\n" + "\n".join(errs))
         sha = hashlib.sha256(spec.read_bytes()).hexdigest()[:16]
-        _seal(root, f"GATE spec {feature} approver={approver} strict={strict} sha={sha}")
+        _seal(root, f"GATE spec {feature} approver={approver} strict={strict} sha={sha}", "spec")
         return {"gate": "spec", "sha": sha}
     if phase == "plan":
         errsS = validate_spec(spec)
@@ -113,15 +156,23 @@ def gate(root: Path, phase: str, feature: str, approver: str = "human", strict: 
         if errsS or errsP:
             raise SystemExit("plan gate FAILED:\n" + "\n".join(errsS + errsP))
         sha = hashlib.sha256(spec.read_bytes()).hexdigest()[:16]
+        reusable = None if reissue else _reusable_approval(root, feature, approver, strict)
+        if reusable:
+            return {"gate": "plan", "tasks": len(tasks), "sha": sha, "approval_seal": reusable["seal"],
+                    "reused": True}
         approval = seal_receipt(receipt_path(root, feature), {
             "schema": "specline.plan-approval.v2", **plan_identity(root, feature),
             "approver": approver, "strict": strict,
             "issued_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "authority": "local-integrity-only",
         })
-        _seal(root, f"GATE plan {feature} approver={approver} tasks={len(tasks)} sha={sha}")
+        _seal(root, f"GATE plan {feature} approver={approver} tasks={len(tasks)} sha={sha}", "plan")
         return {"gate": "plan", "tasks": len(tasks), "sha": sha, "approval_seal": approval["seal"]}
     if phase == "code":
-        _seal(root, f"GATE code {feature} approver={approver} reviewer=personas/reviewer.md auditor=personas/security_auditor.md")
+        missing = _code_gate_missing(root, feature)
+        if missing:
+            raise SystemExit("E_CODE_GATE_PREREQ: tasks without a current completion receipt: " + ", ".join(missing)
+                             + f" (run `specline loop next {feature}`)")
+        _seal(root, f"GATE code {feature} approver={approver} reviewer=personas/reviewer.md auditor=personas/security_auditor.md", "code")
         return {"gate": "code"}
     raise SystemExit(f"unknown gate {phase}")

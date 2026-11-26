@@ -1,6 +1,7 @@
 """specline tasks — atomicity linter. Enforces the double-decomposition
 contract so every task is a clean Ralph-Wiggum session."""
 from __future__ import annotations
+from .paths import read_text
 import re
 from pathlib import Path, PureWindowsPath
 
@@ -42,7 +43,7 @@ def task_path_errors(root: Path, task: dict) -> list[str]:
 TASK = re.compile(r"^- \[( |x)\] (T\d+) \| slice=(\S+) \| files=([^|]+) \| verify=`([^`]+)` \| (.+)$")
 
 def parse_tasks(path: Path) -> list[dict]:
-    return _parse_tasks(Path(path).read_text())
+    return _parse_tasks(read_text(path))
 
 
 def _parse_tasks(text: str) -> list[dict]:
@@ -56,7 +57,7 @@ def _parse_tasks(text: str) -> list[dict]:
     return tasks
 
 def lint_plan(path: Path) -> tuple[list[dict], list[str]]:
-    return _lint_plan(path, Path(path).read_text())
+    return _lint_plan(path, read_text(path))
 
 
 def _lint_plan(path: Path, text: str) -> tuple[list[dict], list[str]]:
@@ -64,12 +65,16 @@ def _lint_plan(path: Path, text: str) -> tuple[list[dict], list[str]]:
     errors = []
     if not tasks:
         errors.append("E_NO_TASKS: no parseable task lines (format: - [ ] T1 | slice=x | files=a,b | verify=`cmd` | text)")
-    if "Architect verdict: PASS" not in text:
-        errors.append("E_NO_VERDICT: plan lacks 'Architect verdict: PASS'")
+    if not re.search(r"(?m)^\s*Architect verdict:\s*PASS\s*$", text):
+        errors.append("E_NO_VERDICT: plan lacks a line that reads exactly 'Architect verdict: PASS'")
     ids = [t["id"] for t in tasks]
     if len(ids) != len(set(ids)):
         errors.append("E_DUP_TASK_ID")
     for t in tasks:
+        if any(re.search(r"<[^>]*>", str(t[key])) for key in ("slice", "verify", "text")):
+            errors.append(f"E_PLAN_PLACEHOLDER: {t['id']} still has a <...> template placeholder")
+        if not t["files"]:
+            errors.append(f"E_TASK_NO_FILES: {t['id']} lists no files")
         if len(t["files"]) > 4:
             errors.append(f"E_TASK_TOO_WIDE: {t['id']} touches {len(t['files'])} files (max 4)")
         errors.extend(task_path_errors(Path(path).absolute().parent.parent, t))

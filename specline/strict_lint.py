@@ -14,6 +14,7 @@ declared facts.
 Deterministic, addressable, severity-tiered (BLOCK vs WARN). No LLM, no clock.
 """
 from __future__ import annotations
+from .paths import read_text
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -201,8 +202,9 @@ def _check_requirement_completeness(text, rep):
             rep.add("S_NO_OUTCOME_VERB", "BLOCK",
                     f"no concrete outcome verb (return/reject/store/emit/…). "
                     f"'shall support/handle X' is not testable: {body!r}", lineno)
+        prose = re.sub(r"`[^`]*`", " ", low)  # quoted literals are exact values, not vague prose
         for vt in sorted(_VAGUE_TERMS):
-            if re.search(rf"\b{re.escape(vt)}\b", low):
+            if re.search(rf"\b{re.escape(vt)}\b", prose):
                 rep.add("S_VAGUE_TERM", "BLOCK",
                         f"vague term {vt!r} — the coder must guess its meaning. State the exact "
                         f"behaviour/threshold: {body!r}", lineno)
@@ -314,7 +316,7 @@ def strict_validate_text(text: str) -> StrictReport:
 
 
 def strict_validate(path: Path) -> StrictReport:
-    return strict_validate_text(Path(path).read_text())
+    return strict_validate_text(read_text(path))
 
 
 def strict_errors(path: Path) -> list[str]:

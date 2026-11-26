@@ -6,6 +6,7 @@ inverting a requirement still passes, that requirement has no observable
 validator and the gate itself is hollow.
 """
 from __future__ import annotations
+from .paths import read_text
 
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -113,7 +114,7 @@ def _summarize(report) -> str:
 
 
 def verify_validators(path: Path) -> ValidatorMutationReport:
-    text = Path(path).read_text()
+    text = read_text(path)
     base = strict_validate_text(text)
     if base.blocks:
         return ValidatorMutationReport(base_findings=base.blocks)
