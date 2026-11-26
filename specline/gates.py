@@ -109,7 +109,33 @@ def _code_gate_missing(root: Path, feature: str) -> list[str]:
     return [task["id"] for task in tasks if not _completion(root, feature, task, refresh=True)]
 
 
-def gate(root: Path, phase: str, feature: str, approver: str = "human", strict: bool = True) -> dict:
+def spec_gate_current(root: Path, feature: str) -> bool:
+    """True when PROGRESS.md records a spec or plan gate for the spec bytes on disk now."""
+    spec = Path(root) / "specs" / f"{feature}.md"
+    progress = Path(root) / "context" / "PROGRESS.md"
+    if not spec.exists() or not progress.exists():
+        return False
+    sha = hashlib.sha256(spec.read_bytes()).hexdigest()[:16]
+    pattern = re.compile(rf"GATE (?:spec|plan) {re.escape(feature)} .*\bsha={sha}\b")
+    return any(pattern.search(line) for line in read_text(progress).splitlines())
+
+
+def _reusable_approval(root: Path, feature: str, approver: str, strict: bool) -> dict | None:
+    """The current approval, if it already binds exactly these inputs; re-sealing would only churn the seal."""
+    try:
+        existing = read_receipt(receipt_path(root, feature))
+    except SystemExit:
+        return None
+    if not existing or existing.get("schema") != "specline.plan-approval.v2":
+        return None
+    if existing.get("approver") != approver or existing.get("strict") != strict:
+        return None
+    identity = plan_identity(root, feature)
+    return existing if all(existing.get(key) == value for key, value in identity.items()) else None
+
+
+def gate(root: Path, phase: str, feature: str, approver: str = "human", strict: bool = True,
+         reissue: bool = False) -> dict:
     root = Path(root)
     receipt_path(root, feature)
     spec = root/"specs"/f"{feature}.md"
@@ -130,6 +156,10 @@ def gate(root: Path, phase: str, feature: str, approver: str = "human", strict: 
         if errsS or errsP:
             raise SystemExit("plan gate FAILED:\n" + "\n".join(errsS + errsP))
         sha = hashlib.sha256(spec.read_bytes()).hexdigest()[:16]
+        reusable = None if reissue else _reusable_approval(root, feature, approver, strict)
+        if reusable:
+            return {"gate": "plan", "tasks": len(tasks), "sha": sha, "approval_seal": reusable["seal"],
+                    "reused": True}
         approval = seal_receipt(receipt_path(root, feature), {
             "schema": "specline.plan-approval.v2", **plan_identity(root, feature),
             "approver": approver, "strict": strict,

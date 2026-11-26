@@ -276,3 +276,50 @@ def export_acceptance_envelope(root: Path, feature: str, contract_path: str, obs
         raise SystemExit("E_ACCEPTANCE_BUDGET: split the feature; envelope exceeds 1 MiB")
     atomic_text(target, output, encoding="utf-8")
     return envelope
+
+
+CATEGORIES = ("happy_path", "validation", "failure_recovery", "state_consistency", "security_privacy",
+              "performance", "accessibility", "external_effects")
+
+
+def _draft_artifact(root: Path, relative: str, kind: str) -> dict:
+    path = contained_path(root, relative)
+    return {"path": relative, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "kind": kind}
+
+
+def draft_evidence(root: Path, feature: str, profile: str = "local-python") -> dict:
+    """Write contract and observation drafts from what SpecLine already knows.
+
+    Drafts never validate: applicability is `null`, every observation is `NOT_RUN` with no timestamp, and the files are
+    named `*.draft.json` so the default `specline evidence` paths cannot read them by accident. A person decides
+    applicability; a recorder runs the checks and sets statuses, timestamps and hashes."""
+    root = Path(root).resolve()
+    identity, approval, plan = _approved_plan_snapshot(root, feature)
+    obligations = _approved_catalogue(root, feature, approval)
+    records, sources = _task_records(root, feature, identity, plan)
+    names = [*sorted(sources), f"specs/{feature}.md", f"plans/{feature}.md"]
+    candidate = [_draft_artifact(root, name, "source") for name in dict.fromkeys(names)]
+    receipts = [_draft_artifact(root, f".factory/specline/{feature}/{task}.json", "report") for task in sorted(records)]
+    contract = {
+        "schema": "factory.workflow-audit.contract.v1", "project_id": feature, "candidate": candidate,
+        "applicability": [{"category": category, "applicable": None, "reason": ""} for category in CATEGORIES],
+        "checks": [{"id": item["id"], "requirement": item["text"], "category": "happy_path", "profiles": [profile]}
+                   for item in obligations],
+    }
+    observations = {
+        "schema": "factory.workflow-audit.observations.v1", "contract_sha256": None,
+        "candidate_sha256": digest(candidate),
+        "observations": [{"id": item["id"], "profile": profile, "status": "NOT_RUN", "reason": "",
+                          "execution_identity": "", "observed_at": None, "artifacts": receipts}
+                         for item in obligations],
+    }
+    out = {}
+    for name, document in (("contract", contract), ("observations", observations)):
+        target = contained_path(root, f".factory/workflow-audit-{name}.draft.json")
+        atomic_text(target, json.dumps(document, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        out[name] = target.relative_to(root).as_posix()
+    return {"drafts": out, "checks": len(obligations), "tasks": sorted(records),
+            "next": ["set every applicability row (a false row needs review_evidence of kind review)",
+                     "run each check, then set status, reason, execution_identity, observed_at and artifacts",
+                     "set observations.contract_sha256 to the SHA-256 of the final contract file",
+                     "save both without .draft and run `specline evidence " + feature + "`"]}

@@ -127,12 +127,8 @@ def validate_with_hsf(text: str) -> str:
 
 
 def _require_spec_gate(root: Path, feature: str) -> None:
-    spec = root / "specs" / f"{feature}.md"
-    progress = root / "context" / "PROGRESS.md"
-    import hashlib
-    sha = hashlib.sha256(spec.read_bytes()).hexdigest()[:16]
-    text = progress.read_text(encoding="utf-8", errors="replace") if progress.exists() else ""
-    if f"GATE spec {feature} " not in text or f"sha={sha}" not in text:
+    from .gates import spec_gate_current
+    if not spec_gate_current(root, feature):
         raise HandoffError("E_HANDOFF_UNGATED", f"spec {feature!r} has no current spec gate; run "
                            f"`specline gate spec {feature}` (or pass --draft)")
 

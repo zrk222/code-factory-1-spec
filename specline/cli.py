@@ -17,10 +17,13 @@ def _run_version(args):
     _emit_version(args.json)
 
 def _run_evidence(args):
-    from .acceptance import catalogue, export_acceptance_envelope
+    from .acceptance import catalogue, draft_evidence, export_acceptance_envelope
     root = Path(args.root)
-    result = (catalogue(root, args.feature) if args.catalog else
-              export_acceptance_envelope(root, args.feature, args.contract, args.observations))
+    if args.init:
+        result = draft_evidence(root, args.feature, args.profile)
+    else:
+        result = (catalogue(root, args.feature) if args.catalog else
+                  export_acceptance_envelope(root, args.feature, args.contract, args.observations))
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
 def _hint(filename: str | None) -> str:
@@ -89,9 +92,13 @@ def _main(argv=None):
     s = sub.add_parser("tasks", help="lint plan task atomicity")
     s.add_argument("feature"); s.add_argument("--root", default=".")
 
+    s = sub.add_parser("next", help="current state of a feature and the one command that moves it forward")
+    s.add_argument("feature"); s.add_argument("--root", default="."); s.add_argument("--json", action="store_true")
+
     s = sub.add_parser("gate", help="record a human gate signoff (spec|plan|code)")
     s.add_argument("phase", choices=["spec", "plan", "code"]); s.add_argument("feature")
     s.add_argument("--approver", default="human"); s.add_argument("--root", default=".")
+    s.add_argument("--reissue", action="store_true", help="plan: seal a new approval even if the current one matches")
 
     s = sub.add_parser("loop", help="Ralph Wiggum loop: next | done")
     s.add_argument("action", choices=["next", "done"]); s.add_argument("feature")
@@ -106,6 +113,8 @@ def _main(argv=None):
     s.set_defaults(handler=_run_evidence)
     s.add_argument("feature"); s.add_argument("--root", default=".")
     s.add_argument("--catalog", action="store_true", help="show exact required check IDs/text without writing")
+    s.add_argument("--init", action="store_true", help="write *.draft.json contract/observations to fill in")
+    s.add_argument("--profile", default="local-python", help="profile name for drafted checks (with --init)")
     s.add_argument("--contract", default=".factory/workflow-audit-contract.json")
     s.add_argument("--observations", default=".factory/workflow-audit-observations.json")
 
@@ -229,9 +238,17 @@ def _main(argv=None):
         tasks, errs = lint_plan(root/"plans"/f"{a.feature}.md")
         if errs: raise SystemExit("PLAN INVALID:\n" + "\n".join(errs))
         print(f"{len(tasks)} atomic tasks OK — next: specline gate plan " + a.feature)
+    elif a.cmd == "next":
+        from .next_step import next_step
+        step = next_step(root, a.feature)
+        if a.json:
+            print(json.dumps(step))
+        else:
+            command = " ".join(step["next_argv"]) if step["next_argv"] else "nothing: feature is done"
+            print(f"state: {step['state']}\nnext:  {command}" + (f"\nwhy:   {step['blocker']}" if step["blocker"] else ""))
     elif a.cmd == "gate":
         from .gates import gate
-        print(json.dumps(gate(root, a.phase, a.feature, a.approver)))
+        print(json.dumps(gate(root, a.phase, a.feature, a.approver, reissue=a.reissue)))
     elif a.cmd == "loop":
         from .loop import next_task, mark_done
         if a.action == "next":
