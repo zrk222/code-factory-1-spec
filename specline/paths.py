@@ -23,7 +23,10 @@ def read_text(path) -> str:
     return read_text_with_encoding(path)[0]
 
 def templates_dir() -> Path:
-    return Path(__file__).resolve().parents[1] / "templates"
+    packaged = Path(__file__).resolve().parent / "templates"
+    if packaged.is_dir():
+        return packaged
+    return Path(__file__).resolve().parents[1] / "templates"  # pre-0.6 source checkouts; remove next release
 
 def project_dirs(root: Path) -> dict:
     return {"specs": root/"specs", "plans": root/"plans", "context": root/"context",

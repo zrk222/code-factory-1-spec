@@ -96,7 +96,7 @@ def test_vague_words_inside_literals_are_not_vague():
 
 
 def test_template_carries_non_goal_and_risk_sections():
-    template = (ROOT / "templates" / "SPEC_TEMPLATE.md").read_text(encoding="utf-8")
+    template = (ROOT / "specline" / "templates" / "SPEC_TEMPLATE.md").read_text(encoding="utf-8")
     assert "## Non-goals" in template and "## Risks and rollback" in template
 
 

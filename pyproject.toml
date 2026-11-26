@@ -17,7 +17,7 @@ Documentation = "https://github.com/zrk222/code-factory-1-spec#readme"
 Issues = "https://github.com/zrk222/code-factory-1-spec/issues"
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "setuptools>=77"]
 
 [project.scripts]
 specline = "specline.cli:main"
@@ -26,7 +26,7 @@ specline = "specline.cli:main"
 include = ["specline*"]
 
 [tool.setuptools.package-data]
-specline = ["../templates/**/*"]
+specline = ["templates/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
