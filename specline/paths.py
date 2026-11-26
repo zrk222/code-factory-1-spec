@@ -32,3 +32,11 @@ def project_dirs(root: Path) -> dict:
     return {"specs": root/"specs", "plans": root/"plans", "context": root/"context",
             "adr": root/"adr", "packets": root/"packets", "slices": root/"slices",
             "skeleton": root/"skeleton", "handoff": root/"handoff", "receipts": root/"receipts"}
+
+
+def progress_text(path) -> tuple[str, str]:
+    """PROGRESS.md and its encoding; a missing file starts from the packaged template (init was skipped)."""
+    path = Path(path)
+    if path.exists():
+        return read_text_with_encoding(path)
+    return read_text(templates_dir() / "context" / "PROGRESS.md"), "utf-8"

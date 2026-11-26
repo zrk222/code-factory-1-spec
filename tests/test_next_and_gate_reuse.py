@@ -95,3 +95,15 @@ def test_different_approver_is_a_new_approval(project):
     first = gate(project, "plan", "refunds")
     other = gate(project, "plan", "refunds", approver="lead")
     assert "reused" not in other and other["approval_seal"] != first["approval_seal"]
+
+
+def test_gates_work_without_init_progress_file(tmp_path):
+    """X-5: a project bootstrapped with `specline new` but no `init` no longer crashes at the first seal."""
+    for kind in ("specs", "plans"):
+        (tmp_path / kind).mkdir()
+        shutil.copyfile(EXAMPLE / kind / "refunds.md", tmp_path / kind / "refunds.md")
+    gate(tmp_path, "spec", "refunds")
+    progress = (tmp_path / "context" / "PROGRESS.md").read_text(encoding="utf-8")
+    assert "## Current phase\nplan" in progress and "GATE spec refunds" in progress
+    gate(tmp_path, "plan", "refunds")
+    assert mark_done(tmp_path, "refunds", "T1")["verified"]

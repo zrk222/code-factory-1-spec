@@ -2,7 +2,7 @@
 and seals it with a receipt in PROGRESS.md. Drift guard: if the spec hash
 changed since plan approval, the loop refuses until the plan is re-gated."""
 from __future__ import annotations
-from .paths import read_text, read_text_with_encoding
+from .paths import progress_text, read_text, read_text_with_encoding
 import hashlib, subprocess, datetime
 from pathlib import Path
 from .plan_lint import lint_plan
@@ -17,7 +17,7 @@ def _progress(root: Path) -> Path:
 def _append_progress(root: Path, line: str):
     p = _progress(root)
     ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M")
-    text, encoding = read_text_with_encoding(p)
+    text, encoding = progress_text(p)
     atomic_text(p, text + f"\n- [{ts}] {line}", encoding=encoding)
 
 def _candidate(root: Path, task: dict, *, digests: dict | None = None) -> dict:

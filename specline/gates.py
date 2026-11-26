@@ -1,7 +1,7 @@
 """Human review gates with receipts. A gate signoff writes a hash-sealed
 line into PROGRESS.md; the loop and drift guard consume those seals."""
 from __future__ import annotations
-from .paths import read_text, read_text_with_encoding
+from .paths import progress_text, read_text, read_text_with_encoding
 import hashlib, datetime, json, os, re, tempfile
 from pathlib import Path
 from .spec_lint import validate_spec
@@ -94,7 +94,7 @@ NEXT_PHASE = {"spec": "plan", "plan": "build", "code": "ship"}
 def _seal(root: Path, line: str, phase: str | None = None):
     p = Path(root)/"context"/"PROGRESS.md"
     ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M")
-    text, encoding = read_text_with_encoding(p)
+    text, encoding = progress_text(p)
     if phase in NEXT_PHASE:
         text = re.sub(r"(## Current phase\n)[^\n#]*", lambda m: m.group(1) + NEXT_PHASE[phase], text, count=1)
     atomic_text(p, text + f"\n- [{ts}] {line}", encoding=encoding)
