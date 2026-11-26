@@ -376,8 +376,10 @@ def test_atomic_receipt_failure_keeps_previous_file(tmp_path, monkeypatch):
     assert list(tmp_path.iterdir()) == [path]
 
 def test_handoff_emits_valid_hsf_spec(project):
+    from specline.gates import gate
     from specline.handoff import handoff_to_hsf
     import yaml
+    gate(project, "spec", "refunds")
     out = handoff_to_hsf(project, "refunds")
     spec = yaml.safe_load(out.read_text())
     assert spec["workflow_spec"] == "refunds_decisions"
