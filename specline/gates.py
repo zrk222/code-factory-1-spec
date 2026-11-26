@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib, datetime, json, os, re, tempfile
 from pathlib import Path
 from .spec_lint import validate_spec
-from .plan_lint import lint_plan
+from .plan_lint import lint_plan, parse_tasks
 from .strict_lint import strict_errors
 
 
@@ -92,6 +92,16 @@ def _seal(root: Path, line: str):
     ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M")
     atomic_text(p, p.read_text() + f"\n- [{ts}] {line}")
 
+def _code_gate_missing(root: Path, feature: str) -> list[str]:
+    """Signing off code needs an approved plan and a current completion receipt for every task."""
+    from .loop import _completion
+    require_plan_approval(root, feature)
+    tasks = parse_tasks(Path(root) / "plans" / f"{feature}.md")
+    if not tasks:
+        return ["<no tasks in plan>"]
+    return [task["id"] for task in tasks if not _completion(root, feature, task, refresh=True)]
+
+
 def gate(root: Path, phase: str, feature: str, approver: str = "human", strict: bool = True) -> dict:
     root = Path(root)
     receipt_path(root, feature)
@@ -122,6 +132,10 @@ def gate(root: Path, phase: str, feature: str, approver: str = "human", strict: 
         _seal(root, f"GATE plan {feature} approver={approver} tasks={len(tasks)} sha={sha}")
         return {"gate": "plan", "tasks": len(tasks), "sha": sha, "approval_seal": approval["seal"]}
     if phase == "code":
+        missing = _code_gate_missing(root, feature)
+        if missing:
+            raise SystemExit("E_CODE_GATE_PREREQ: tasks without a current completion receipt: " + ", ".join(missing)
+                             + f" (run `specline loop next {feature}`)")
         _seal(root, f"GATE code {feature} approver={approver} reviewer=personas/reviewer.md auditor=personas/security_auditor.md")
         return {"gate": "code"}
     raise SystemExit(f"unknown gate {phase}")

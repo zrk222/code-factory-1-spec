@@ -64,12 +64,16 @@ def _lint_plan(path: Path, text: str) -> tuple[list[dict], list[str]]:
     errors = []
     if not tasks:
         errors.append("E_NO_TASKS: no parseable task lines (format: - [ ] T1 | slice=x | files=a,b | verify=`cmd` | text)")
-    if "Architect verdict: PASS" not in text:
-        errors.append("E_NO_VERDICT: plan lacks 'Architect verdict: PASS'")
+    if not re.search(r"(?m)^\s*Architect verdict:\s*PASS\s*$", text):
+        errors.append("E_NO_VERDICT: plan lacks a line that reads exactly 'Architect verdict: PASS'")
     ids = [t["id"] for t in tasks]
     if len(ids) != len(set(ids)):
         errors.append("E_DUP_TASK_ID")
     for t in tasks:
+        if any(re.search(r"<[^>]*>", str(t[key])) for key in ("slice", "verify", "text")):
+            errors.append(f"E_PLAN_PLACEHOLDER: {t['id']} still has a <...> template placeholder")
+        if not t["files"]:
+            errors.append(f"E_TASK_NO_FILES: {t['id']} lists no files")
         if len(t["files"]) > 4:
             errors.append(f"E_TASK_TOO_WIDE: {t['id']} touches {len(t['files'])} files (max 4)")
         errors.extend(task_path_errors(Path(path).absolute().parent.parent, t))

@@ -22,10 +22,35 @@ def _run_evidence(args):
               export_acceptance_envelope(root, args.feature, args.contract, args.observations))
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
+def _hint(filename: str | None) -> str:
+    name = str(filename or "").replace("\\", "/")
+    if "/specs/" in f"/{name}" or "/plans/" in f"/{name}":
+        return "Run `specline new <feature>` to create the spec and plan."
+    if name.endswith("AGENTS.md") or "/context/" in f"/{name}":
+        return "Run `specline init` in the project root first."
+    return "Check the path and the --root option."
+
+
 def main(argv=None):
+    """Entry point with one error boundary: ordinary mistakes print an E_ code, never a traceback."""
+    try:
+        return _main(argv)
+    except FileNotFoundError as exc:
+        raise SystemExit(f"E_NOT_FOUND: {exc.filename or exc}. {_hint(exc.filename)}") from None
+    except FileExistsError as exc:
+        raise SystemExit(f"E_EXISTS: {exc.filename or exc} already exists; edit it or choose another feature name") from None
+    except IsADirectoryError as exc:
+        raise SystemExit(f"E_NOT_A_FILE: {exc.filename or exc}") from None
+
+
+def _main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == "--version":
-        _emit_version("--json" in argv)
+        if "--json" in argv:
+            _emit_version(True)
+        else:
+            from . import __version__
+            print(f"specline {__version__}")
         return
     p = argparse.ArgumentParser(prog="specline", description="Spec-driven production line for AI coding agents")
     sub = p.add_subparsers(required=True, dest="cmd")
@@ -74,6 +99,7 @@ def main(argv=None):
 
     s = sub.add_parser("handoff", help="emit HSF workflow spec from decision table")
     s.add_argument("feature"); s.add_argument("--root", default=".")
+    s.add_argument("--draft", action="store_true", help="emit even without a current spec gate")
 
     s = sub.add_parser("evidence", help="export current declared acceptance evidence for CF/ForgeLine")
     s.set_defaults(handler=_run_evidence)
@@ -144,6 +170,9 @@ def main(argv=None):
                              indent=2))
         for f in rep.blocks:
             print(str(f))
+        if rep.blocks and not rep.requirements and getattr(rep, "base_findings", None):
+            raise SystemExit("\nSTRICT FAILED FIRST: fix these before mutation can run "
+                             f"(`specline strict {a.feature}`).")
         if rep.blocks:
             raise SystemExit(f"\nVALIDATOR MUTATION FAILED: {len(rep.blocks)} hollow validator(s) detected.")
         print(f"VALIDATORS OK - all {len(rep.requirements)} requirement mutation(s) were killed.")
@@ -209,9 +238,9 @@ def main(argv=None):
             if not a.task_id: raise SystemExit("task_id required for done")
             print(json.dumps(mark_done(root, a.feature, a.task_id, run_verify=not a.no_verify)))
     elif a.cmd == "handoff":
-        from .handoff import handoff_to_hsf
-        out = handoff_to_hsf(root, a.feature)
-        print(f"HSF spec: {out}\ncompile with: hsf compile {out}")
+        from .handoff import handoff_to_hsf, next_steps
+        out = handoff_to_hsf(root, a.feature, draft=a.draft)
+        print(next_steps(out))
     elif a.cmd == "agent":
         from .adapters import wire_agent
         created = wire_agent(root, a.name)
